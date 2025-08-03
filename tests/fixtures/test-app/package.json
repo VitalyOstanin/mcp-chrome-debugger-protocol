@@ -1,0 +1,20 @@
+{
+  "name": "mcp-test-app",
+  "version": "1.0.0",
+  "private": true,
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "debug": "node --inspect dist/index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.0",
+    "get-port": "^7.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^22.0.0",
+    "@types/express": "^4.17.0"
+  }
+}

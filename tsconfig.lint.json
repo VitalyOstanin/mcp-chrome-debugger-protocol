@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/**/*",
+    "tests/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "tests/fixtures/test-app"
+  ],
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["jest", "node"]
+  }
+}

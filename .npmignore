@@ -1,0 +1,38 @@
+# Demo files (large size)
+demo-ts-mcp-chrome-debugger-protocol.gif
+demo-ts-mcp-chrome-debugger-protocol.svg
+
+# Development files
+src/
+tests/
+eslint.config.mjs
+jest.config.cjs
+jest.config.integration.cjs
+tsconfig.lint.json
+
+# Documentation (keep only README.md)
+CLAUDE.md
+DONATIONS.md
+donation-qr.png
+
+# Source maps (development only)
+dist/**/*.map
+
+# Development scripts
+scripts/dev-test.sh
+scripts/analyze-protocol.cjs
+
+# IDE and system files
+.vscode/
+.idea/
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Git files
+.git/
+.gitignore
+
+# Node modules
+node_modules/

@@ -1,0 +1,75 @@
+{
+  "name": "@vitalyostanin/mcp-chrome-debugger-protocol",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "mcp-chrome-debugger-protocol": "dist/index.js"
+  },
+  "scripts": {
+    "prebuild": "node scripts/analyze-protocol.cjs",
+    "build": "tsc",
+    "postbuild": "chmod +x dist/index.js",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "dev:server": "npm run build && node dist/index.js",
+    "dev:test": "bash scripts/dev-test.sh",
+    "dev:test:ts": "bash scripts/dev-test.sh ts",
+    "mcp:install": "bash scripts/install-claude-code-mcp.sh",
+    "mcp:install:dev": "bash scripts/install-claude-code-dev-mcp.sh",
+    "mcp:uninstall": "bash scripts/uninstall-claude-code-mcp.sh",
+    "test": "jest --config jest.config.cjs",
+    "test:watch": "jest --config jest.config.cjs --watch",
+    "test:integration": "jest --config jest.config.integration.cjs",
+    "test:integration:watch": "jest --config jest.config.integration.cjs --watch",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "prepublishOnly": "npm run build"
+  },
+  "author": "Vitaly Ostanin <vitaly.ostanin@mail.ru>",
+  "license": "MIT",
+  "description": "MCP server for Chrome debugger protocol (Node.js)",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "chrome-devtools",
+    "debugger",
+    "nodejs",
+    "debugging",
+    "chrome-remote-interface",
+    "claude"
+  ],
+  "homepage": "https://github.com/vitalyostanin/mcp-chrome-debugger-protocol#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vitalyostanin/mcp-chrome-debugger-protocol.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vitalyostanin/mcp-chrome-debugger-protocol/issues"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "README.md"
+  ],
+  "dependencies": {
+    "@jridgewell/trace-mapping": "^0.3.29",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "chrome-remote-interface": "^0.33.2",
+    "devtools-protocol": "^0.0.1495869",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/chrome-remote-interface": "^0.31.14",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@vitalyostanin/eslint-prefer-de-morgan-law": "^1.0.2",
+    "eslint": "^9.0.0",
+    "jest": "^29.0.0",
+    "ts-jest": "^29.0.0",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.38.0"
+  }
+}
