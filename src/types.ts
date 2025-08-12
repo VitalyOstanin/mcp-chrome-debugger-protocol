@@ -1,8 +1,7 @@
-import CDP from "chrome-remote-interface";
-import type { Protocol } from 'devtools-protocol';
+import type { NodeJSDebugAdapter } from "./nodejs-debug-adapter.js";
 
 export interface DebuggerConnection {
-  client: CDP.Client | null;
+  adapter: NodeJSDebugAdapter | null;
   isConnected: boolean;
   webSocketUrl?: string;
 }
@@ -16,21 +15,26 @@ export interface TruncationOptions {
 }
 
 export interface LogpointHit {
-  message: string;
+  // Optional human-readable message, derived from payload when present
+  message?: string;
+  // Raw payload string as sent from Runtime.bindingCalled
+  payloadRaw?: string;
+  // Parsed JSON payload, if applicable
+  payload?: unknown;
   timestamp: Date;
   executionContextId: number;
-  stackTrace?: Protocol.Runtime.StackTrace;
-  level?: 'info' | 'warn' | 'error' | 'debug';
+  stackTrace?: unknown;
+  level?: string;
 }
 
 export interface DebuggerEvent {
   type: 'paused' | 'resumed';
   timestamp: Date;
-  data: Protocol.Debugger.PausedEvent | Record<string, never>;
+  data: Record<string, unknown>;
 }
 
 export interface TrackedBreakpoint {
-  breakpointId: string;
+  breakpointId: number;
   type: 'breakpoint' | 'logpoint';
   originalRequest: {
     filePath: string;
@@ -39,12 +43,12 @@ export interface TrackedBreakpoint {
     condition?: string;
     logMessage?: string;
   };
-  actualLocation?: {
+  actualLocation: {
     scriptId?: string;
     lineNumber: number;
     columnNumber: number;
   };
-  sourceMapResolution?: {
+  sourceMapResolution: {
     used: boolean;
     sourceMapFile?: string;
     matchedSource?: string;
@@ -55,4 +59,17 @@ export interface TrackedBreakpoint {
     };
   };
   timestamp: Date;
+}
+
+export interface SourceCodeContext {
+  filePath: string;
+  targetLine: number;
+  lines: Array<{
+    lineNumber: number;
+    content: string;
+    isTarget?: boolean;
+    hasBreakpoint?: boolean;
+    hasLogpoint?: boolean;
+  }>;
+  recommendation?: string;
 }

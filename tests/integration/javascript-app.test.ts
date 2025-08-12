@@ -35,7 +35,7 @@ describe("MCP Chrome Debugger Protocol - JavaScript App Tests", () => {
     it("should start JavaScript test app successfully", async () => {
       const { pid, port, serverPort } = await testApp.start({
         enableDebugger: true,
-        appType: 'javascript'
+        appType: 'javascript',
       });
 
       expect(pid).toBeDefined();
@@ -52,13 +52,12 @@ describe("MCP Chrome Debugger Protocol - JavaScript App Tests", () => {
     it("should connect to JavaScript app debugger", async () => {
       const { pid, port } = await testApp.start({
         enableDebugger: true,
-        appType: 'javascript'
+        appType: 'javascript',
       });
 
       expect(pid).toBeDefined();
       expect(port).toBeDefined();
 
-      await setTimeout(2000);
       await debuggerHelper.connectToDebugger(port);
 
       // Verify connection by trying to get call stack (this will succeed if connected)
@@ -74,10 +73,9 @@ describe("MCP Chrome Debugger Protocol - JavaScript App Tests", () => {
     it("should set breakpoint in JavaScript code without source maps", async () => {
       const { port } = await testApp.start({
         enableDebugger: true,
-        appType: 'javascript'
+        appType: 'javascript',
       });
 
-      await setTimeout(2000);
       await debuggerHelper.connectToDebugger(port);
 
       const mainScriptPath = await debuggerHelper.getMainScriptPath();
@@ -88,45 +86,42 @@ describe("MCP Chrome Debugger Protocol - JavaScript App Tests", () => {
       const breakpointResult = await debuggerHelper.setBreakpoint(
         mainScriptPath,
         75, // Approximate line number for testBreakpointFunction
-        0
+        1,
       );
 
-      expect(breakpointResult.breakpointId).toBeDefined();
-      expect(breakpointResult.actualLocation).toBeDefined();
-
-      // Verify no source map resolution was used for JavaScript app
-      if (breakpointResult.sourceMapResolution) {
-        expect(breakpointResult.sourceMapResolution.used).toBe(false);
-      }
+      expect(breakpointResult.id).toBeDefined();
+      expect(breakpointResult.verified).toBe(true);
+      expect(breakpointResult.line).toBe(75);
+      expect(breakpointResult.source?.path).toBeDefined();
     });
 
     it("should set logpoint in JavaScript code", async () => {
       const { port } = await testApp.start({
         enableDebugger: true,
-        appType: 'javascript'
+        appType: 'javascript',
       });
 
-      await setTimeout(2000);
       await debuggerHelper.connectToDebugger(port);
 
       const mainScriptPath = await debuggerHelper.getMainScriptPath();
-
       // Set logpoint in the addData method (around line 15)
       const logpointResult = await debuggerHelper.setLogpoint(
         mainScriptPath,
         15,
-        0,
-        "Adding data item: {name}, {value}"
+        1,
+        "Adding data item: {name}, {value}",
       );
 
-      expect(logpointResult.breakpointId).toBeDefined();
-      expect(logpointResult.actualLocation).toBeDefined();
+      expect(logpointResult.id).toBeDefined();
+      expect(logpointResult.verified).toBe(true);
+      expect(logpointResult.line).toBe(15);
+      expect(logpointResult.source?.path).toBeDefined();
     });
 
     it("should evaluate expressions in JavaScript context", async () => {
       const { port } = await testApp.start({
         enableDebugger: true,
-        appType: 'javascript'
+        appType: 'javascript',
       });
 
       await setTimeout(2000);
@@ -143,14 +138,13 @@ describe("MCP Chrome Debugger Protocol - JavaScript App Tests", () => {
     it("should handle HTTP requests to JavaScript app", async () => {
       const { pid, serverPort } = await testApp.start({
         enableDebugger: false,
-        appType: 'javascript'
+        appType: 'javascript',
       });
 
       expect(pid).toBeDefined();
       expect(serverPort).toBeDefined();
 
-      // Wait for server to be ready
-      await setTimeout(1000);
+      // Server is ready when start() resolves
 
       // Make a request to the health endpoint
       const response = await fetch(`http://localhost:${serverPort}/health`);
@@ -187,23 +181,22 @@ describe("MCP Chrome Debugger Protocol - JavaScript App Tests", () => {
     it("should handle breakpoints differently without source maps", async () => {
       const { port } = await testApp.start({
         enableDebugger: true,
-        appType: 'javascript'
+        appType: 'javascript',
       });
 
       await setTimeout(2000);
       await debuggerHelper.connectToDebugger(port);
 
       const mainScriptPath = await debuggerHelper.getMainScriptPath();
-
       // Set multiple breakpoints to test JavaScript debugging
-      const breakpoint1 = await debuggerHelper.setBreakpoint(mainScriptPath, 75, 0); // testBreakpointFunction
-      const breakpoint2 = await debuggerHelper.setBreakpoint(mainScriptPath, 65, 0); // fibonacci function
+      const breakpoint1 = await debuggerHelper.setBreakpoint(mainScriptPath, 75, 1); // testBreakpointFunction
+      const breakpoint2 = await debuggerHelper.setBreakpoint(mainScriptPath, 65, 1); // fibonacci function
 
-      expect(breakpoint1.breakpointId).toBeDefined();
-      expect(breakpoint2.breakpointId).toBeDefined();
+      expect(breakpoint1.id).toBeDefined();
+      expect(breakpoint2.id).toBeDefined();
 
       // Both breakpoints should have different IDs
-      expect(breakpoint1.breakpointId).not.toBe(breakpoint2.breakpointId);
+      expect(breakpoint1.id).not.toBe(breakpoint2.id);
     });
   });
 });

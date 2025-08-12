@@ -1,5 +1,7 @@
 # Claude Memory for MCP Chrome Debugger Protocol
 
+> Also read `AGENTS.md` (Repository Guidelines) for contributor instructions and day-to-day workflow.
+
 ## Project Rules
 - **ABSOLUTELY NEVER use `any` type anywhere in TypeScript code** - always use proper typing, create interfaces, use unknown with type guards, or use generic types
 - **Use official types from modules instead of custom types** - import and use existing types from @modelcontextprotocol/sdk and other modules rather than creating custom interfaces
@@ -16,8 +18,8 @@
 
 ## Project Structure
 - Main MCP server: `src/mcp-server.ts`
-- Debugger manager: `src/debugger-manager.ts` 
-- Tools registry: `src/tools-registry.ts` (defines tool schemas)
+- Debugger manager: `src/dap-debugger-manager.ts`
+- MCP tools are registered directly in `src/mcp-server.ts` (single source of schemas and handlers)
 - Tests: `tests/integration/` for integration tests
 - Test fixtures: `tests/fixtures/test-app/` contains a TypeScript test application
 
@@ -26,6 +28,13 @@
 - Logpoints are implemented as conditional breakpoints with console.log expressions
 - Search functionality uses ripgrep to find compiled files
 - All tools should return structured JSON data, not user-friendly messages
+
+### Coordinate System
+- **MCP/DAP Protocol Level**: All line and column numbers are 1-based (lines start at 1, columns start at 1)
+- **Internal Source Map Resolution**: Converts MCP/DAP coordinates to trace-mapping format:
+  - Lines: 1-based (no conversion needed)  
+  - Columns: MCP/DAP 1-based → trace-mapping 0-based (subtract 1 for input, add 1 for output)
+- **Critical**: All MCP tool parameters expect 1-based line and column numbers
 
 ## Testing
 - Integration tests run with `npm run test:integration`

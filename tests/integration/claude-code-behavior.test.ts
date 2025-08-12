@@ -37,12 +37,11 @@ describe('Claude Code MCP behavior simulation', () => {
     it('should reproduce Claude Code issue: ignoring tool list change notifications', async () => {
       // Step 1: Get initial tool list (disconnected state)
       const initialTools = await mcpClient.listTools() as Tool[];
-
       // Simulate Claude Code behavior: cache the initial tool list
       const claudeCodeToolCache = new Set(initialTools.map(t => t.name));
 
-      // Verify set_logpoint is available (our workaround)
-      expect(claudeCodeToolCache.has('set_logpoint')).toBe(true);
+      // Verify setBreakpoints is available (our workaround)
+      expect(claudeCodeToolCache.has('setBreakpoints')).toBe(true);
 
       // Step 2: Start debugger and connect
       const { port } = await testApp.start({ enableDebugger: true });
@@ -54,22 +53,27 @@ describe('Claude Code MCP behavior simulation', () => {
 
       // Step 4: Simulate Claude Code behavior - ignore notifications and keep old cache
       // In real Claude Code, the tool list would NOT be refreshed
-      // But with our workaround, set_logpoint should still be available
+      // But with our workaround, setBreakpoints should still be available
 
-      // Verify our workaround: set_logpoint remains visible
-      expect(claudeCodeToolCache.has('set_logpoint')).toBe(true);
+      // Verify our workaround: setBreakpoints remains visible
+      expect(claudeCodeToolCache.has('setBreakpoints')).toBe(true);
 
-      // Step 5: Try to use set_logpoint - should work with our runtime validation
-      const logpointResult = await mcpClient.callTool('set_logpoint', {
-        filePath: path.resolve(__dirname, '../fixtures/test-app/src/index.ts'),
-        lineNumber: 17,
-        columnNumber: 4,
-        logMessage: 'Test logpoint from integration test'
+      // Step 5: Try to use setBreakpoints with logMessage - should work with our runtime validation
+      const logpointResult = await mcpClient.callTool('setBreakpoints', {
+        source: { path: path.resolve(__dirname, '../fixtures/test-app/src/index.ts') },
+        breakpoints: [{
+          line: 17,
+          column: 4,
+          logMessage: 'Test logpoint from integration test',
+        }],
       });
 
       // Should succeed because we're connected
       expect(logpointResult.content).toBeDefined();
-      expect(logpointResult.content[0].text).toContain('breakpointId');
+
+      const result = JSON.parse(logpointResult.content[0].text);
+
+      expect(result.success).toBe(true);
     });
 
     it('should demonstrate the old problematic behavior with dynamic tool registration', async () => {
@@ -78,11 +82,11 @@ describe('Claude Code MCP behavior simulation', () => {
       // Step 1: Get initial tools (only connection tools available)
       const initialTools = await mcpClient.listTools() as Tool[];
       const connectionOnlyTools = initialTools.filter(tool =>
-        ['connect_default', 'connect_url', 'enable_debugger_pid', 'get_debugger_state'].includes(tool.name)
+        ['attach', 'getDebuggerState'].includes(tool.name),
       );
 
       // Simulate old behavior: only connection tools visible initially
-      expect(connectionOnlyTools.some(t => t.name === 'set_logpoint')).toBe(false);
+      expect(connectionOnlyTools.some(t => t.name === 'setBreakpoints')).toBe(false);
 
       // Step 2: Connect and check if Claude Code would see new tools
       const { port } = await testApp.start({ enableDebugger: true });
@@ -90,51 +94,54 @@ describe('Claude Code MCP behavior simulation', () => {
       await debuggerHelper.connectToDebugger(port);
 
       // In the old approach, tools/list_changed notification would be sent
-      // but Claude Code would ignore it, so set_logpoint would remain invisible
+      // but Claude Code would ignore it, so setBreakpoints would remain invisible
 
       // Our current approach solves this by showing all tools upfront
       const allToolsNow = await mcpClient.listTools() as Tool[];
 
-      expect(allToolsNow.some(t => t.name === 'set_logpoint')).toBe(true);
+      expect(allToolsNow.some(t => t.name === 'setBreakpoints')).toBe(true);
     });
 
     it('should validate runtime tool availability checking', async () => {
       // Test that tools validate availability at runtime
 
-      // Step 1: Try set_logpoint without connection (should get helpful error)
-      const disconnectedResult = await mcpClient.callTool('set_logpoint', {
-        filePath: '/test/file.js',
-        lineNumber: 10,
-        columnNumber: 0,
-        logMessage: 'Test message'
+      // Step 1: Try setBreakpoints without connection (should get helpful error)
+      const disconnectedResult = await mcpClient.callTool('setBreakpoints', {
+        source: { path: '/test/file.js' },
+        breakpoints: [{
+          line: 10,
+          column: 0,
+          logMessage: 'Test message',
+        }],
       });
 
-      expect(disconnectedResult.content[0].text).toContain('not available');
-      expect(disconnectedResult.content[0].text).toContain('requires connection');
       expect(disconnectedResult.content[0].text).toContain('disabled');
+      expect(disconnectedResult.content[0].text).toContain('Requires debugger connection');
 
       // Step 2: Connect and try again (should work)
       const { port } = await testApp.start({ enableDebugger: true });
 
       await debuggerHelper.connectToDebugger(port);
 
-      const connectedResult = await mcpClient.callTool('set_logpoint', {
-        filePath: path.resolve(__dirname, '../fixtures/test-app/src/index.ts'),
-        lineNumber: 17,
-        columnNumber: 4,
-        logMessage: 'Test logpoint after connection'
+      const connectedResult = await mcpClient.callTool('setBreakpoints', {
+        source: { path: path.resolve(__dirname, '../fixtures/test-app/src/index.ts') },
+        breakpoints: [{
+          line: 17,
+          column: 4,
+          logMessage: 'Test logpoint after connection',
+        }],
       });
+      const result = JSON.parse(connectedResult.content[0].text);
 
-      expect(connectedResult.content[0].text).toContain('breakpointId');
+      expect(result.success).toBe(true);
     });
 
     it('should handle multiple state transitions correctly', async () => {
       // Test tool availability through different debugger states
 
       const states = [];
-
       // State 1: Disconnected
-      let debuggerState = await mcpClient.callTool('get_debugger_state', {});
+      let debuggerState = await mcpClient.callTool('getDebuggerState', {});
       let stateData = JSON.parse(debuggerState.content[0].text);
 
       states.push({ state: stateData.state.state, enabledTools: stateData.toolsAvailability.enabled.length });
@@ -144,14 +151,14 @@ describe('Claude Code MCP behavior simulation', () => {
 
       await debuggerHelper.connectToDebugger(port);
 
-      debuggerState = await mcpClient.callTool('get_debugger_state', {});
+      debuggerState = await mcpClient.callTool('getDebuggerState', {});
       stateData = JSON.parse(debuggerState.content[0].text);
       states.push({ state: stateData.state.state, enabledTools: stateData.toolsAvailability.enabled.length });
 
       // State 3: Disconnected again
       await mcpClient.callTool('disconnect', {});
 
-      debuggerState = await mcpClient.callTool('get_debugger_state', {});
+      debuggerState = await mcpClient.callTool('getDebuggerState', {});
       stateData = JSON.parse(debuggerState.content[0].text);
       states.push({ state: stateData.state.state, enabledTools: stateData.toolsAvailability.enabled.length });
 
@@ -164,35 +171,31 @@ describe('Claude Code MCP behavior simulation', () => {
       // But tools list should remain constant (our workaround)
       const toolsAfterAllTransitions = await mcpClient.listTools() as Tool[];
 
-      expect(toolsAfterAllTransitions.some(t => t.name === 'set_logpoint')).toBe(true);
+      expect(toolsAfterAllTransitions.some(t => t.name === 'setBreakpoints')).toBe(true);
     });
   });
 
   describe('Tool availability validation', () => {
     it('should provide clear error messages for unavailable tools', async () => {
       const debuggingTools = [
-        'set_breakpoint',
-        'set_logpoint',
-        'remove_breakpoint',
-        'resume',
+        'setBreakpoints',
+        'removeBreakpoint',
+        'continue',
         'pause',
-        'step_over',
-        'step_into',
-        'step_out',
-        'evaluate'
+        'next',
+        'stepIn',
+        'stepOut',
+        'evaluate',
       ];
 
       // Test each debugging tool without connection
       for (const toolName of debuggingTools) {
         const result = await mcpClient.callTool(toolName, {
           // Provide minimal required parameters
-          ...(toolName === 'set_breakpoint' && { filePath: '/test.js', lineNumber: 1, columnNumber: 0 }),
-          ...(toolName === 'set_logpoint' && { filePath: '/test.js', lineNumber: 1, columnNumber: 0, logMessage: 'test' }),
-          ...(toolName === 'remove_breakpoint' && { breakpointId: 'test' }),
+          ...(toolName === 'setBreakpoints' && { source: { path: '/test.js' }, breakpoints: [{ line: 1 }] }),
+          ...(toolName === 'removeBreakpoint' && { breakpointId: 123 }),
           ...(toolName === 'evaluate' && { expression: '1+1' }),
-          ...(toolName === 'get_scope_variables' && { callFrameId: 'test' })
         });
-
         const responseText = result.content[0].text;
 
         // Different tools may have different error formats, but they should indicate unavailability
@@ -203,14 +206,13 @@ describe('Claude Code MCP behavior simulation', () => {
     });
 
     it('should allow connection tools when disconnected', async () => {
-      const connectionTools = ['connect_default', 'connect_url', 'enable_debugger_pid'];
+      const connectionTools = ['attach'];
 
       for (const toolName of connectionTools) {
         // These shouldn't throw validation errors (though they may fail for other reasons)
         try {
           await mcpClient.callTool(toolName, {
-            ...(toolName === 'connect_url' && { url: 'ws://invalid:9229' }),
-            ...(toolName === 'enable_debugger_pid' && { pid: 99999 })
+            ...(toolName === 'attach' && { url: 'ws://invalid:9229' }),
           });
         } catch (error) {
           // Connection failures are expected, but not validation errors
@@ -226,20 +228,18 @@ describe('Claude Code MCP behavior simulation', () => {
 
       const allTools = await mcpClient.listTools() as Tool[];
       const toolNames = allTools.map(t => t.name);
-
       // All essential debugging tools should be visible from the start
       const expectedDebuggingTools = [
-        'set_breakpoint',
-        'set_logpoint',
-        'remove_breakpoint',
-        'resume',
+        'setBreakpoints',
+        'removeBreakpoint',
+        'continue',
         'pause',
-        'step_over',
-        'step_into',
-        'step_out',
+        'next',
+        'stepIn',
+        'stepOut',
         'evaluate',
-        'get_call_stack',
-        'get_scope_variables'
+        'stackTrace',
+        'variables',
       ];
 
       for (const tool of expectedDebuggingTools) {
@@ -254,21 +254,22 @@ describe('Claude Code MCP behavior simulation', () => {
     it('should maintain consistent tool list across connection state changes', async () => {
       // Get tool list in different states
       const toolsWhenDisconnected = await mcpClient.listTools() as Tool[];
-
       const { port } = await testApp.start({ enableDebugger: true });
 
       await debuggerHelper.connectToDebugger(port);
+
       const toolsWhenConnected = await mcpClient.listTools() as Tool[];
 
       await mcpClient.callTool('disconnect', {});
+
       const toolsAfterDisconnect = await mcpClient.listTools() as Tool[];
 
       // Tool lists should be identical (our workaround)
       expect(toolsWhenDisconnected.map(t => t.name).sort()).toEqual(
-        toolsWhenConnected.map(t => t.name).sort()
+        toolsWhenConnected.map(t => t.name).sort(),
       );
       expect(toolsWhenConnected.map(t => t.name).sort()).toEqual(
-        toolsAfterDisconnect.map(t => t.name).sort()
+        toolsAfterDisconnect.map(t => t.name).sort(),
       );
 
     });

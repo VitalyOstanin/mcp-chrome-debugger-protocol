@@ -1,224 +1,146 @@
-import {
-  TOOL_REQUIREMENTS,
-  STATE_COMMAND_MAP,
-  isToolAllowedInState,
-  getRequiredDomainsForTool,
-  getToolsForState,
-  ToolRequirement
-} from "./generated/protocol-requirements.js";
-
-export type DebuggerState = 'disconnected' | 'connected' | 'debuggerPaused';
-
 export interface ToolStateInfo {
   isEnabled: boolean;
   reason?: string;
-  requiredDomains?: string[];
 }
 
-export class ToolStateManager {
-  private currentState: DebuggerState = 'disconnected';
-  private isPaused: boolean = false;
-  private enabledDomains: Set<string> = new Set();
-  private stateChangeCallbacks: Array<(state: DebuggerState) => void> = [];
+interface ToolRule {
+  requiresConnection?: boolean;
+  requiresPause?: boolean;
+  onlyWhenDisconnected?: boolean;
+}
 
-  constructor() {
-    this.currentState = 'disconnected';
-  }
+// Simple rules for each tool
+const TOOL_RULES: Record<string, ToolRule> = {
+  // Connection tools - only when disconnected
+  'attach': { onlyWhenDisconnected: true },
+  'launch': { onlyWhenDisconnected: true },
+
+  // Disconnection tools - only when connected
+  'disconnect': { requiresConnection: true },
+  'terminate': { requiresConnection: true },
+  'restart': { requiresConnection: true },
+
+  // Breakpoint management - require connection
+  'setBreakpoints': { requiresConnection: true },
+  'removeBreakpoint': { requiresConnection: true },
+  'getBreakpoints': { requiresConnection: true },
+  'setExceptionBreakpoints': { requiresConnection: true },
+  'breakpointLocations': { requiresConnection: true },
+
+  // Execution control - basic ones require connection
+  'continue': { requiresConnection: true },
+  'pause': { requiresConnection: true },
+
+  // Stepping - require connection and pause
+  'next': { requiresConnection: true, requiresPause: true },
+  'stepIn': { requiresConnection: true, requiresPause: true },
+  'stepOut': { requiresConnection: true, requiresPause: true },
+  'goto': { requiresConnection: true, requiresPause: true },
+  'restartFrame': { requiresConnection: true, requiresPause: true },
+
+  // Variable inspection - require connection
+  'evaluate': { requiresConnection: true },
+  'stackTrace': { requiresConnection: true },
+  'variables': { requiresConnection: true },
+  'scopes': { requiresConnection: true },
+  'setVariable': { requiresConnection: true },
+  'threads': { requiresConnection: true },
+  'loadedSources': { requiresConnection: true },
+  'exceptionInfo': { requiresConnection: true },
+
+  // Utility tools - always available
+  'getLogpointHits': {},
+  'clearLogpointHits': {},
+  'getDebuggerEvents': {},
+  'clearDebuggerEvents': {},
+  'getDebuggerState': {},
+  'resolveOriginalPosition': {},
+  'resolveGeneratedPosition': {},
+};
+
+export class ToolStateManager {
+  private isConnected = false;
+  private isPaused = false;
+  private readonly stateChangeCallbacks: Array<(isConnected: boolean, isPaused: boolean) => void> = [];
 
   // State management
-  getCurrentState(): DebuggerState {
-    return this.currentState;
-  }
-
-  isPausedState(): boolean {
-    return this.isPaused;
-  }
-
-  getEnabledDomains(): string[] {
-    return Array.from(this.enabledDomains);
-  }
-
-  setState(newState: DebuggerState, isPaused: boolean = false): void {
-    const oldState = this.currentState;
-
-    this.currentState = newState;
-    this.isPaused = isPaused;
-
-    if (oldState !== newState) {
-      this.notifyStateChange(newState);
-    }
-  }
-
   setConnection(connected: boolean): void {
-    if (connected) {
-      if (this.currentState === 'disconnected') {
-        this.setState('connected');
+    if (this.isConnected !== connected) {
+      this.isConnected = connected;
+      // Reset pause state when disconnected
+      if (!connected) {
+        this.isPaused = false;
       }
-    } else {
-      this.setState('disconnected');
-      this.enabledDomains.clear();
-      this.isPaused = false;
+      this.notifyStateChange();
     }
-  }
-
-  enableDomain(domain: string): void {
-    this.enabledDomains.add(domain);
-    // No state transition needed - we stay in current state
-  }
-
-  disableDomain(domain: string): void {
-    this.enabledDomains.delete(domain);
-    // No state transition needed - we stay in current state
   }
 
   setPaused(paused: boolean): void {
-    const oldPaused = this.isPaused;
-
-    this.isPaused = paused;
-
-    // Update state based on pause status
-    if (paused && this.currentState === 'connected') {
-      this.setState('debuggerPaused', true);
-    } else if (!paused && this.currentState === 'debuggerPaused') {
-      this.setState('connected', false);
-    }
-
-    // Notify even if state didn't change but pause status did
-    if (oldPaused !== paused) {
-      this.notifyStateChange(this.currentState);
+    if (this.isPaused !== paused) {
+      this.isPaused = paused;
+      this.notifyStateChange();
     }
   }
 
   // Tool availability checking
   isToolEnabled(toolName: string): boolean {
-    return this.getToolState(toolName).isEnabled;
+    const rule = TOOL_RULES[toolName];
+
+    if (!(toolName in TOOL_RULES)) {
+      return false;
+    }
+
+    // Check rules in priority order
+    if (rule.onlyWhenDisconnected && this.isConnected) return false;
+    if (rule.requiresConnection && !this.isConnected) return false;
+    if (rule.requiresPause && !this.isPaused) return false;
+
+    return true;
   }
 
   getToolState(toolName: string): ToolStateInfo {
-    const requirement = TOOL_REQUIREMENTS[toolName];
+    const rule = TOOL_RULES[toolName];
 
-    if (!requirement) {
+    if (!(toolName in TOOL_RULES)) {
       return {
         isEnabled: false,
-        reason: `Unknown tool: ${toolName}`
+        reason: `Unknown tool: ${toolName}`,
       };
     }
 
-    const enabledDomainsArray = this.getEnabledDomains();
-    const isAllowed = isToolAllowedInState(
-      toolName,
-      this.currentState,
-      this.isPaused,
-      enabledDomainsArray
-    );
-
-    if (!isAllowed) {
-      const reasons = this.getDisabledReasons(toolName, requirement);
-
-      return {
-        isEnabled: false,
-        reason: reasons.join(', '),
-        requiredDomains: requirement.domains
-      };
-    }
+    const isEnabled = this.isToolEnabled(toolName);
 
     return {
-      isEnabled: true,
-      requiredDomains: requirement.domains
+      isEnabled,
+      reason: isEnabled ? undefined : this.getDisabledReason(toolName, rule),
     };
   }
 
-  private getDisabledReasons(toolName: string, requirement: ToolRequirement): string[] {
-    const reasons: string[] = [];
-
-    // Check connection requirement
-    if (requirement.requiresConnection && this.currentState === 'disconnected') {
-      reasons.push('requires connection');
+  private getDisabledReason(toolName: string, rule: ToolRule): string {
+    if (rule.onlyWhenDisconnected && this.isConnected) {
+      return 'Only available when disconnected from debugger';
+    }
+    if (rule.requiresConnection && !this.isConnected) {
+      return 'Requires debugger connection';
+    }
+    if (rule.requiresPause && !this.isPaused) {
+      return 'Requires debugger to be paused';
     }
 
-    // Check state compatibility first - this is the primary check
-    const stateInfo = STATE_COMMAND_MAP[this.currentState];
-    const isStateCompatible = stateInfo?.allowedTools.includes(toolName) ||
-                             stateInfo?.allowedCategories.includes(requirement.category);
-
-    if (!isStateCompatible) {
-      reasons.push(`not available in ${this.currentState} state`);
-
-      return reasons; // Early return if state doesn't allow the tool
-    }
-
-    // Check domain enablement requirement only if state allows the tool
-    if (requirement.requiresEnable && requirement.domains.length > 0) {
-      const missingDomains = requirement.domains.filter(domain =>
-        !this.enabledDomains.has(domain)
-      );
-
-      if (missingDomains.length > 0) {
-        reasons.push(`requires domains: ${missingDomains.join(', ')}`);
-      }
-    }
-
-    // Check pause requirement
-    if (requirement.requiresPause && !this.isPaused) {
-      reasons.push('requires debugger to be paused');
-    }
-
-    return reasons;
+    return 'Tool disabled';
   }
 
+  // Utility methods for compatibility
   getAllEnabledTools(): string[] {
-    return getToolsForState(this.currentState, this.isPaused, this.getEnabledDomains());
+    return Object.keys(TOOL_RULES).filter(tool => this.isToolEnabled(tool));
   }
 
   getAllDisabledTools(): string[] {
-    const allTools = Object.keys(TOOL_REQUIREMENTS);
-    const enabledTools = this.getAllEnabledTools();
-
-    return allTools.filter(tool => !enabledTools.includes(tool));
-  }
-
-  getToolsByCategory(category: string): { enabled: string[], disabled: string[] } {
-    const enabled: string[] = [];
-    const disabled: string[] = [];
-
-    Object.keys(TOOL_REQUIREMENTS).forEach(toolName => {
-      const requirement = TOOL_REQUIREMENTS[toolName];
-
-      if (requirement.category === category) {
-        if (this.isToolEnabled(toolName)) {
-          enabled.push(toolName);
-        } else {
-          disabled.push(toolName);
-        }
-      }
-    });
-
-    return { enabled, disabled };
-  }
-
-  // Auto-enable required domains for a tool
-  autoEnableDomainsForTool(toolName: string): boolean {
-    const requiredDomains = getRequiredDomainsForTool(toolName);
-
-    if (requiredDomains.length === 0) {
-      return true; // No domains required
-    }
-
-    const missingDomains = requiredDomains.filter(domain =>
-      !this.enabledDomains.has(domain)
-    );
-
-    if (missingDomains.length > 0) {
-      missingDomains.forEach(domain => this.enableDomain(domain));
-
-      return true;
-    }
-
-    return false; // No domains were enabled
+    return Object.keys(TOOL_RULES).filter(tool => !this.isToolEnabled(tool));
   }
 
   // Event handling
-  onStateChange(callback: (state: DebuggerState) => void): () => void {
+  onStateChange(callback: (isConnected: boolean, isPaused: boolean) => void): () => void {
     this.stateChangeCallbacks.push(callback);
 
     // Return unsubscribe function
@@ -231,10 +153,10 @@ export class ToolStateManager {
     };
   }
 
-  private notifyStateChange(newState: DebuggerState): void {
+  private notifyStateChange(): void {
     this.stateChangeCallbacks.forEach(callback => {
       try {
-        callback(newState);
+        callback(this.isConnected, this.isPaused);
       } catch (error) {
         console.error('Error in state change callback:', error);
       }
@@ -243,22 +165,40 @@ export class ToolStateManager {
 
   // Debug information
   getDebugInfo(): {
-    state: DebuggerState;
+    state: string;
+    isConnected: boolean;
     isPaused: boolean;
-    enabledDomains: string[];
     enabledTools: string[];
     disabledTools: string[];
+    enabledDomains: string[];
     stateDescription: string;
   } {
-    const stateInfo = STATE_COMMAND_MAP[this.currentState];
+    const state = this.getCurrentState();
+    const stateDescriptions = {
+      'disconnected': 'Not connected to debugger',
+      'connected': 'Connected to debugger',
+      'debuggerPaused': 'Debugger paused at breakpoint or step',
+    };
 
     return {
-      state: this.currentState,
+      state,
+      isConnected: this.isConnected,
       isPaused: this.isPaused,
-      enabledDomains: this.getEnabledDomains(),
       enabledTools: this.getAllEnabledTools(),
       disabledTools: this.getAllDisabledTools(),
-      stateDescription: stateInfo?.description ?? 'Unknown state'
+      enabledDomains: this.isConnected ? ['Debugger', 'Runtime', 'Console'] : [],
+      stateDescription: stateDescriptions[state as keyof typeof stateDescriptions] || 'Unknown state',
     };
+  }
+
+  // Backward compatibility methods
+  getCurrentState(): string {
+    if (!this.isConnected) return 'disconnected';
+
+    return this.isPaused ? 'debuggerPaused' : 'connected';
+  }
+
+  isPausedState(): boolean {
+    return this.isPaused;
   }
 }

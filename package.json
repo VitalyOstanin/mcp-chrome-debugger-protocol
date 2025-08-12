@@ -1,13 +1,12 @@
 {
   "name": "@vitalyostanin/mcp-chrome-debugger-protocol",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
     "mcp-chrome-debugger-protocol": "dist/index.js"
   },
   "scripts": {
-    "prebuild": "node scripts/analyze-protocol.cjs",
     "build": "tsc",
     "postbuild": "chmod +x dist/index.js",
     "dev": "tsc --watch",
@@ -55,8 +54,11 @@
   "dependencies": {
     "@jridgewell/trace-mapping": "^0.3.29",
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "chrome-remote-interface": "^0.33.2",
-    "devtools-protocol": "^0.0.1495869",
+    "@types/ws": "^8.18.1",
+    "@vscode/debugadapter": "^1.68.0",
+    "@vscode/debugprotocol": "^1.68.0",
+    "chrome-remote-interface": "^0.33.3",
+    "ws": "^8.18.3",
     "zod": "^3.25.76"
   },
   "devDependencies": {

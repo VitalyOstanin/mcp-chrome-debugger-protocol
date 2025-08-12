@@ -40,9 +40,7 @@ tests/
 ## Test Suites
 
 ### 1. Connection Tests (`integration/connection.test.ts`)
-- **connect_default**: Default port (9229) connections
-- **connect_url**: WebSocket URL connections
-- **enable_debugger_pid**: Runtime debugger enabling via SIGUSR1
+- **attach**: Attach by default port / WebSocket URL / PID (SIGUSR1)
 - **disconnect**: Connection cleanup
 - Error handling and reconnection scenarios
 
@@ -54,24 +52,23 @@ tests/
 - Performance and metadata validation
 
 ### 3. Breakpoint Tests (`integration/breakpoints.test.ts`)
-- **set_breakpoint**: Basic and conditional breakpoints
-- **set_logpoint**: Logpoints with expression interpolation
-- **remove_breakpoint**: Breakpoint cleanup
+- **setBreakpoints**: Basic, conditional, and logpoints (`logMessage`)
+- **removeBreakpoint**: Breakpoint cleanup
 - Multiple breakpoint management
 - Breakpoint behavior during execution
 
 ### 4. Execution Control Tests (`integration/execution.test.ts`)
 - **pause**: Execution pausing
-- **resume**: Execution resumption
-- **step_over**: Line-by-line stepping
-- **step_into**: Function call stepping
-- **step_out**: Function exit stepping
+- **continue**: Execution resumption
+- **next**: Line-by-line stepping
+- **stepIn**: Function call stepping
+- **stepOut**: Function exit stepping
 - Complex scenarios (loops, async operations, nested calls)
 
 ### 5. Evaluation Tests (`integration/evaluation.test.ts`)
 - **evaluate**: Expression evaluation in various contexts
-- **get_call_stack**: Call stack inspection
-- **get_scope_variables**: Variable inspection by scope
+- **stackTrace**: Call stack inspection
+- **variables/scopes**: Variable inspection by scope
 - Context-aware evaluation (this, local variables, call frames)
 - Error handling for invalid expressions
 

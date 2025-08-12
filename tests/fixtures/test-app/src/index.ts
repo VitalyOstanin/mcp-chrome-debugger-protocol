@@ -115,6 +115,23 @@ async function main(): Promise<void> {
     });
   });
 
+  // Headers test endpoint for logpoint testing
+  app.get("/headers-test", (req, res) => {
+    // Access req.headers to make it available for logpoint capture
+    const userAgent = req.headers['user-agent'];
+    const contentType = req.headers['content-type'];
+    const customHeader = req.headers['x-test-header'];
+    
+    res.status(200).json({
+      message: "headers-test endpoint",
+      userAgent,
+      contentType,
+      customHeader,
+      allHeadersCount: Object.keys(req.headers).length,
+      timestamp: new Date().toISOString()
+    });
+  });
+
   // Health check endpoint
   app.get("/health", (req, res) => {
     res.status(200).json({
@@ -139,6 +156,7 @@ async function main(): Promise<void> {
     console.log(`Endpoints available:`);
     console.log(`  GET http://localhost:${port}/test1`);
     console.log(`  GET http://localhost:${port}/test2`);
+    console.log(`  GET http://localhost:${port}/headers-test`);
     console.log(`  GET http://localhost:${port}/health`);
   });
 

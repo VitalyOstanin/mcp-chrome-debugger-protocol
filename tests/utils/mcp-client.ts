@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { ChildProcess } from "child_process";
+import type { ChildProcess } from "child_process";
 import path from "path";
 import { spawnedProcesses } from "../setup";
 
@@ -17,7 +17,7 @@ export class MCPClient {
   private transport: StdioClientTransport | null = null;
   private isConnected = false;
 
-  constructor(private serverPath: string) {}
+  constructor(private readonly serverPath: string) {}
 
   async connect(): Promise<void> {
     if (this.isConnected) {
@@ -30,7 +30,7 @@ export class MCPClient {
       command: "node",
       args: [serverAbsolutePath],
       env: Object.fromEntries(
-        Object.entries(process.env).filter(([, value]) => value !== undefined)
+        Object.entries(process.env).filter(([, value]) => value !== undefined),
       ) as Record<string, string>,
     });
 
@@ -41,7 +41,7 @@ export class MCPClient {
       },
       {
         capabilities: {},
-      }
+      },
     );
 
     await this.client.connect(this.transport);

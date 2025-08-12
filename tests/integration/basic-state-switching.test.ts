@@ -1,6 +1,6 @@
 import { TestAppManager } from "../utils/test-app-manager";
 import { DebuggerTestHelper } from "../utils/debugger-test-helper";
-import { setTimeout } from "node:timers/promises";
+import { waitForDebuggerState } from "../utils/wait-helpers";
 import { globalMCPClient } from "../setup";
 
 describe("MCP Chrome Debugger Protocol - Basic State Switching", () => {
@@ -26,46 +26,58 @@ describe("MCP Chrome Debugger Protocol - Basic State Switching", () => {
     await testApp.stop();
   });
 
-  describe("connect_url tool state switching", () => {
+  describe("attach tool state switching", () => {
     it("should work correctly with Claude Code CLI", async () => {
       const { pid, webSocketUrl } = await testApp.start({
-        enableDebugger: true
+        enableDebugger: true,
       });
 
       expect(pid).toBeDefined();
       expect(webSocketUrl).toBeDefined();
 
-      await setTimeout(2000);
+      // App is ready immediately after start
 
-      // Before connection - connect_url should be available
-      const connectResult = await globalMCPClient!.callTool("connect_url", {
-        url: webSocketUrl!
+      // Before connection - attach should be available
+      const connectResult = await globalMCPClient!.callTool("attach", {
+        url: webSocketUrl!,
+      });
+      const connectData = JSON.parse(connectResult.content[0].text);
+
+      expect(connectData.success).toBe(true);
+
+      // Wait until connection state is reflected in debugger state
+      await waitForDebuggerState(globalMCPClient!, (s: unknown) => {
+        if (!(s && typeof s === 'object')) return false;
+
+        const st = s as { connection?: { isConnected?: boolean } };
+
+        return st.connection?.isConnected === true;
       });
 
-      expect(connectResult.isError).toBeFalsy();
-      expect(connectResult.content[0].text).toContain("Successfully connected");
-
-      // Wait for tool state changes to propagate
-      await setTimeout(1000);
-
-      // After connection - connect_url should be disabled
-      const connectResult2 = await globalMCPClient!.callTool("connect_url", { url: webSocketUrl! });
+      // After connection - attach should be disabled
+      const connectResult2 = await globalMCPClient!.callTool("attach", { url: webSocketUrl! });
 
       expect(connectResult2.isError).toBe(true);
       expect(connectResult2.content[0].text).toContain("disabled");
 
       // Check debugger state after connection
-      const debuggerStateResult = await globalMCPClient!.callTool("get_debugger_state");
+      const debuggerStateResult = await globalMCPClient!.callTool("getDebuggerState");
 
       expect(debuggerStateResult.isError).toBeFalsy();
 
-      // Wait a bit for tool state to propagate
-      await setTimeout(500);
+      // Ensure state reflects connected tools
+      await waitForDebuggerState(globalMCPClient!, (s: unknown) => {
+        if (!(s && typeof s === 'object')) return false;
+
+        const st = s as { state?: { disabledTools?: string[] } };
+
+        return Array.isArray(st.state?.disabledTools) && st.state.disabledTools.includes('attach');
+      });
 
       // After connection - try a simple tool that should work
       const disconnectTest = await globalMCPClient!.callTool("disconnect");
 
-      expect(disconnectTest.isError).toBeFalsy();
+      expect(disconnectTest.content[0].text).toContain("Disconnected");
 
       // Disconnect
       await debuggerHelper.disconnectFromDebugger();
@@ -81,66 +93,69 @@ describe("MCP Chrome Debugger Protocol - Basic State Switching", () => {
       expect(disconnectResult.isError).toBe(true);
       expect(disconnectResult.content[0].text).toContain("disabled");
 
-      const breakpointResult = await globalMCPClient!.callTool("set_breakpoint", {
-        filePath: "/some/path",
-        lineNumber: 1,
-        columnNumber: 0
+      const breakpointResult = await globalMCPClient!.callTool("setBreakpoints", {
+        source: { path: "/some/path" },
+        breakpoints: [{ line: 1 }],
       });
 
       expect(breakpointResult.isError).toBe(true);
       expect(breakpointResult.content[0].text).toContain("disabled");
 
       const evaluateResult = await globalMCPClient!.callTool("evaluate", {
-        expression: "1 + 1"
+        expression: "1 + 1",
       });
 
       expect(evaluateResult.isError).toBe(true);
-      expect(evaluateResult.content[0].text).toContain("Not connected");
+      expect(evaluateResult.content[0].text).toContain("disabled");
     });
 
     it("should allow using connection tools when disconnected", async () => {
       // Connection tools should work when disconnected
       const { pid, webSocketUrl } = await testApp.start({
-        enableDebugger: true
+        enableDebugger: true,
       });
 
       expect(pid).toBeDefined();
       expect(webSocketUrl).toBeDefined();
-      await setTimeout(2000);
 
-      const connectResult = await globalMCPClient!.callTool("connect_url", {
-        url: webSocketUrl!
+      const connectResult = await globalMCPClient!.callTool("attach", {
+        url: webSocketUrl!,
       });
+      const connectResultData = JSON.parse(connectResult.content[0].text);
 
-      expect(connectResult.isError).toBeFalsy();
-      expect(connectResult.content[0].text).toContain("Successfully connected");
+      expect(connectResultData.success).toBe(true);
     });
   });
 
   describe("Connection and disconnection flow", () => {
     it("should handle complete connect-disconnect cycle", async () => {
       const { pid, port } = await testApp.start({
-        enableDebugger: true
+        enableDebugger: true,
       });
 
       expect(pid).toBeDefined();
-      await setTimeout(2000);
 
       // Step 1: Connect
       await debuggerHelper.connectToDebugger(port);
 
-      // Wait for tool state changes to propagate
-      await setTimeout(1000);
+      // Wait until connected state is reflected
+      await waitForDebuggerState(globalMCPClient!, (s: unknown) => {
+        if (!(s && typeof s === 'object')) return false;
+
+        const st = s as { connection?: { isConnected?: boolean } };
+
+        return st.connection?.isConnected === true;
+      });
 
       // Step 2: Verify debugging tools work
       const evaluateResult = await globalMCPClient!.callTool("evaluate", {
-        expression: "typeof process"
+        expression: "typeof process",
       });
 
       expect(evaluateResult.isError).toBeFalsy();
 
       // Step 3: Verify connection tools are disabled
-      const connectResult3 = await globalMCPClient!.callTool("connect_url", { url: `ws://127.0.0.1:${port}` });
+      const connectResult3 = await globalMCPClient!.callTool("attach", { url: `ws://127.0.0.1:${port}` });
 
       expect(connectResult3.isError).toBe(true);
       expect(connectResult3.content[0].text).toContain("disabled");
@@ -148,16 +163,22 @@ describe("MCP Chrome Debugger Protocol - Basic State Switching", () => {
       // Step 4: Disconnect
       await debuggerHelper.disconnectFromDebugger();
 
-      // Wait for tool state changes to propagate
-      await setTimeout(1000);
+      // Wait until disconnected state is reflected
+      await waitForDebuggerState(globalMCPClient!, (s: unknown) => {
+        if (!(s && typeof s === 'object')) return false;
+
+        const st = s as { connection?: { isConnected?: boolean } };
+
+        return st.connection?.isConnected === false;
+      });
 
       // Step 5: Verify debugging tools are disabled after disconnect
       const result = await globalMCPClient!.callTool("evaluate", {
-        expression: "1 + 1"
+        expression: "1 + 1",
       });
 
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("Not connected");
+      expect(result.content[0].text).toContain("disabled");
     });
   });
 });

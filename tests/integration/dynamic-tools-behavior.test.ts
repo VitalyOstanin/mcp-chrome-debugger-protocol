@@ -40,10 +40,8 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
 
       // Step 1: Get initial tool list (what Claude Code would cache)
       const initialTools = await mcpClient.listTools() as Tool[];
-
       // Claude Code caches this list and ignores future notifications
       const claudeCodeCache = new Set(initialTools.map(t => t.name));
-
       // Step 2: Connect to debugger (would trigger tool changes in old approach)
       const { port } = await testApp.start({ enableDebugger: true });
 
@@ -52,7 +50,6 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
 
       // Step 3: Check server-side tool availability vs Claude Code cache
       const serverTools = await mcpClient.listTools() as Tool[];
-
       // Step 4: Simulate Claude Code problem - cached list doesn't update
       const serverToolNames = new Set(serverTools.map(t => t.name));
       const newToolsServerKnows = Array.from(serverToolNames).filter(name => !claudeCodeCache.has(name));
@@ -69,7 +66,6 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
       // Simulate the notification sending behavior
 
       const notificationLog: string[] = [];
-
       // Mock notification handler (Claude Code would ignore these)
       const mockClaudeCodeNotificationHandler = (notification: string) => {
         notificationLog.push(notification);
@@ -104,17 +100,15 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
       // All tools are always visible
       const allTools = await mcpClient.listTools();
       const debuggingTools = (allTools as Tool[]).filter((t: Tool) =>
-        ['set_breakpoint', 'set_logpoint', 'resume', 'pause'].includes(t.name)
+        ['setBreakpoints', 'continue', 'pause'].includes(t.name),
       );
 
       expect(debuggingTools.length).toBeGreaterThan(0);
 
       // Step 1: Try debugging tool without connection (runtime validation)
-      const invalidResult = await mcpClient.callTool('set_logpoint', {
-        filePath: '/test.js',
-        lineNumber: 1,
-        columnNumber: 0,
-        logMessage: 'test'
+      const invalidResult = await mcpClient.callTool('setBreakpoints', {
+        source: { path: '/test.js' },
+        breakpoints: [{ line: 1, column: 0, logMessage: 'test' }],
       });
 
       expect(invalidResult.content[0].text).toContain('is disabled');
@@ -125,14 +119,13 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
 
       await debuggerHelper.connectToDebugger(port);
 
-      const validResult = await mcpClient.callTool('set_logpoint', {
-        filePath: testApp.getMainFilePath(),
-        lineNumber: 10,
-        columnNumber: 0,
-        logMessage: 'Runtime validation success!'
+      const validResult = await mcpClient.callTool('setBreakpoints', {
+        source: { path: testApp.getMainFilePath() },
+        breakpoints: [{ line: 10, column: 0, logMessage: 'Runtime validation success!' }],
       });
+      const result = JSON.parse(validResult.content[0].text);
 
-      expect(validResult.content[0].text).toContain('breakpointId');
+      expect(result.success).toBe(true);
     });
 
     it('should handle rapid state changes gracefully', async () => {
@@ -147,14 +140,13 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
         await debuggerHelper.connectToDebugger(port);
 
         // Test tool availability
-        const result = await mcpClient.callTool('set_logpoint', {
-          filePath: testApp.getMainFilePath(),
-          lineNumber: 5 + i,
-          columnNumber: 0,
-          logMessage: `Cycle ${i + 1} test`
+        const result = await mcpClient.callTool('setBreakpoints', {
+          source: { path: testApp.getMainFilePath() },
+          breakpoints: [{ line: 5 + i, column: 0, logMessage: `Cycle ${i + 1} test` }],
         });
+        const parsedResult = JSON.parse(result.content[0].text);
 
-        expect(result.content[0].text).toContain('breakpointId');
+        expect(parsedResult.success).toBe(true);
 
         // Disconnect
         await mcpClient.callTool('disconnect', {});
@@ -163,7 +155,7 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
         // Verify tools still visible but not functional
         const toolsStillVisible = await mcpClient.listTools();
 
-        expect((toolsStillVisible as Tool[]).some((t: Tool) => t.name === 'set_logpoint')).toBe(true);
+        expect((toolsStillVisible as Tool[]).some((t: Tool) => t.name === 'setBreakpoints')).toBe(true);
       }
 
     });
@@ -181,17 +173,15 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
       // Verify new experience
       const allTools = await mcpClient.listTools();
 
-      expect((allTools as Tool[]).some((t: Tool) => t.name === 'set_logpoint')).toBe(true);
+      expect((allTools as Tool[]).some((t: Tool) => t.name === 'setBreakpoints')).toBe(true);
 
       // Helpful error without connection
-      const helpfulError = await mcpClient.callTool('set_logpoint', {
-        filePath: '/test.js',
-        lineNumber: 1,
-        columnNumber: 0,
-        logMessage: 'test'
+      const helpfulError = await mcpClient.callTool('setBreakpoints', {
+        source: { path: '/test.js' },
+        breakpoints: [{ line: 1, column: 0, logMessage: 'test' }],
       });
 
-      expect(helpfulError.content[0].text).toContain('not available');
+      expect(helpfulError.content[0].text).toContain('disabled');
       // Error message provides clear indication that the tool is disabled
 
       // Works after connection
@@ -199,14 +189,13 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
 
       await debuggerHelper.connectToDebugger(port);
 
-      const workingResult = await mcpClient.callTool('set_logpoint', {
-        filePath: testApp.getMainFilePath(),
-        lineNumber: 8,
-        columnNumber: 0,
-        logMessage: 'UX improvement verified!'
+      const workingResult = await mcpClient.callTool('setBreakpoints', {
+        source: { path: testApp.getMainFilePath() },
+        breakpoints: [{ line: 8, column: 0, logMessage: 'UX improvement verified!' }],
       });
+      const workingResultData = JSON.parse(workingResult.content[0].text);
 
-      expect(workingResult.content[0].text).toContain('breakpointId');
+      expect(workingResultData.success).toBe(true);
 
     });
 
@@ -214,29 +203,29 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
       // Reproduce the exact issue from the user's report
 
 
-      // Step 1: Check debugger state (should show set_logpoint as disabled)
-      const debuggerState = await mcpClient.callTool('get_debugger_state', {});
+      // Step 1: Check debugger state (should show setBreakpoints as disabled)
+      const debuggerState = await mcpClient.callTool('getDebuggerState', {});
       const stateData = JSON.parse(debuggerState.content[0].text);
 
-      expect(stateData.toolsAvailability.disabled).toContain('set_logpoint');
+      expect(stateData.toolsAvailability.disabled).toContain('setBreakpoints');
 
-      // Step 2: Check if set_logpoint visible in tool list (our fix)
+      // Step 2: Check if setBreakpoints visible in tool list (our fix)
       const toolList = await mcpClient.listTools();
-      const hasSetLogpoint = (toolList as Tool[]).some((t: Tool) => t.name === 'set_logpoint');
+      const hasSetBreakpoints = (toolList as Tool[]).some((t: Tool) => t.name === 'setBreakpoints');
 
-      expect(hasSetLogpoint).toBe(true);
+      expect(hasSetBreakpoints).toBe(true);
 
       // Step 3: Connect and verify both state and tool list are consistent
       const { port } = await testApp.start({ enableDebugger: true });
 
       await debuggerHelper.connectToDebugger(port);
 
-      const connectedState = await mcpClient.callTool('get_debugger_state', {});
+      const connectedState = await mcpClient.callTool('getDebuggerState', {});
       const connectedStateData = JSON.parse(connectedState.content[0].text);
 
 
-      expect(connectedStateData.toolsAvailability.enabled).toContain('set_logpoint');
-      expect((toolList as Tool[]).some((t: Tool) => t.name === 'set_logpoint')).toBe(true);
+      expect(connectedStateData.toolsAvailability.enabled).toContain('setBreakpoints');
+      expect((toolList as Tool[]).some((t: Tool) => t.name === 'setBreakpoints')).toBe(true);
 
     });
   });

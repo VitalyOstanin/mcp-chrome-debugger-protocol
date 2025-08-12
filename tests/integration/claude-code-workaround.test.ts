@@ -1,6 +1,6 @@
 /**
  * Integration test verifying our workaround for Claude Code's ignored tool list change notifications
- * This test demonstrates that set_logpoint is always visible, solving the original issue
+ * This test demonstrates that setBreakpoints (which handles logpoints) is always visible, solving the original issue
  */
 
 import { MCPClient } from '../utils/mcp-client';
@@ -33,15 +33,15 @@ describe('Claude Code workaround verification', () => {
     await mcpClient.disconnect();
   });
 
-  it('should always show set_logpoint in tool list (main issue fix)', async () => {
-    // This is the core issue that was reported: set_logpoint not visible in Claude Code
+  it('should always show setBreakpoints in tool list (main issue fix)', async () => {
+    // This is the core issue that was reported: debugging tools not visible in Claude Code
 
 
-    // Check that set_logpoint is immediately visible
+    // Check that setBreakpoints is immediately visible
     const allTools = await mcpClient.listTools() as Tool[];
     const toolNames = allTools.map(t => t.name);
 
-    expect(toolNames).toContain('set_logpoint');
+    expect(toolNames).toContain('setBreakpoints');
 
     // Verify this persists across connection state changes
     const { port } = await testApp.start({ enableDebugger: true });
@@ -50,13 +50,13 @@ describe('Claude Code workaround verification', () => {
 
     const toolsAfterConnection = await mcpClient.listTools() as Tool[];
 
-    expect(toolsAfterConnection.map(t => t.name)).toContain('set_logpoint');
+    expect(toolsAfterConnection.map(t => t.name)).toContain('setBreakpoints');
 
     await mcpClient.callTool('disconnect', {});
 
     const toolsAfterDisconnection = await mcpClient.listTools() as Tool[];
 
-    expect(toolsAfterDisconnection.map(t => t.name)).toContain('set_logpoint');
+    expect(toolsAfterDisconnection.map(t => t.name)).toContain('setBreakpoints');
 
   });
 
@@ -64,15 +64,13 @@ describe('Claude Code workaround verification', () => {
     // Test runtime validation approach
 
 
-    // Try set_logpoint without connection
-    const errorResult = await mcpClient.callTool('set_logpoint', {
-      filePath: '/test/file.js',
-      lineNumber: 10,
-      columnNumber: 0,
-      logMessage: 'test'
+    // Try setBreakpoints without connection
+    const errorResult = await mcpClient.callTool('setBreakpoints', {
+      source: { path: '/test/file.js' },
+      breakpoints: [{ line: 10, logMessage: 'test' }],
     });
 
-    expect(errorResult.content[0].text).toContain('not available');
+    expect(errorResult.content[0].text).toContain('disabled');
     // Error message indicates the tool is disabled, which is the key information
 
   });
@@ -85,14 +83,17 @@ describe('Claude Code workaround verification', () => {
 
     await debuggerHelper.connectToDebugger(port);
 
-    const logpointResult = await mcpClient.callTool('set_logpoint', {
-      filePath: path.resolve(__dirname, '../fixtures/test-app/src/index.ts'),
-      lineNumber: 17,
-      columnNumber: 4,
-      logMessage: 'Integration test logpoint: counter = {counter}'
+    const logpointResult = await mcpClient.callTool('setBreakpoints', {
+      source: { path: path.resolve(__dirname, '../fixtures/test-app/src/index.ts') },
+      breakpoints: [{
+        line: 17,
+        column: 4,
+        logMessage: 'Integration test logpoint: counter = {counter}',
+      }],
     });
+    const result = JSON.parse(logpointResult.content[0].text);
 
-    expect(logpointResult.content[0].text).toContain('breakpointId');
+    expect(result.success).toBe(true);
   });
 
   it('should demonstrate the problem that was solved', async () => {
@@ -102,12 +103,12 @@ describe('Claude Code workaround verification', () => {
 
     const allTools = await mcpClient.listTools() as Tool[];
     const debuggingTools = allTools.filter(t =>
-      ['set_breakpoint', 'set_logpoint', 'remove_breakpoint', 'resume', 'pause', 'step_over', 'step_into', 'step_out'].includes(t.name)
+      ['setBreakpoints', 'removeBreakpoint', 'continue', 'pause', 'next', 'stepIn', 'stepOut'].includes(t.name),
     );
 
 
     expect(debuggingTools.length).toBeGreaterThan(5);
-    expect(debuggingTools.some(t => t.name === 'set_logpoint')).toBe(true);
+    expect(debuggingTools.some(t => t.name === 'setBreakpoints')).toBe(true);
 
   });
 
@@ -116,15 +117,16 @@ describe('Claude Code workaround verification', () => {
 
 
     const initialCount = (await mcpClient.listTools()).length;
-
     // Connect
     const { port } = await testApp.start({ enableDebugger: true });
 
     await debuggerHelper.connectToDebugger(port);
+
     const connectedCount = (await mcpClient.listTools()).length;
 
     // Disconnect
     await mcpClient.callTool('disconnect', {});
+
     const disconnectedCount = (await mcpClient.listTools()).length;
 
     // All should be the same (our workaround)
@@ -138,16 +140,16 @@ describe('Claude Code workaround verification', () => {
 
 
     // Get debugger state
-    const debuggerState = await mcpClient.callTool('get_debugger_state', {});
+    const debuggerState = await mcpClient.callTool('getDebuggerState', {});
     const stateData = JSON.parse(debuggerState.content[0].text);
 
-    expect(stateData.toolsAvailability.disabled).toContain('set_logpoint');
+    expect(stateData.toolsAvailability.disabled).toContain('setBreakpoints');
 
     // Check tool list
     const toolList = await mcpClient.listTools() as Tool[];
-    const hasSetLogpoint = toolList.some(t => t.name === 'set_logpoint');
+    const hasSetBreakpoints = toolList.some(t => t.name === 'setBreakpoints');
 
-    expect(hasSetLogpoint).toBe(true);
+    expect(hasSetBreakpoints).toBe(true);
 
   });
 });

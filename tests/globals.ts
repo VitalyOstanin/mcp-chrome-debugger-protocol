@@ -1,4 +1,4 @@
-import { MCPClient } from "./utils/mcp-client";
+import type { MCPClient } from "./utils/mcp-client";
 
 // Global MCP client instance for all tests
 export let globalMCPClient: MCPClient | null = null;

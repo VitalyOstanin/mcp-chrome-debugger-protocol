@@ -1,7 +1,6 @@
 import { MCPClient } from "../utils/mcp-client";
 import { TestAppManager } from "../utils/test-app-manager";
 import path from "path";
-import { setTimeout } from "node:timers/promises";
 
 interface Test1Response {
   message: string;
@@ -53,13 +52,11 @@ describe("MCP Chrome Debugger Protocol - HTTP Server Tests", () => {
       expect(serverPort).toBeDefined();
       expect(serverPort).toBeGreaterThan(0);
 
-      // Give the server a moment to fully start
-      await setTimeout(1000);
-
       // Verify server is accessible
       const response1 = await fetch(`http://localhost:${serverPort}/test1`);
 
       expect(response1.status).toBe(200);
+
       const data1 = await response1.json() as Test1Response;
 
       expect(data1.message).toBe("test1 endpoint");
@@ -69,6 +66,7 @@ describe("MCP Chrome Debugger Protocol - HTTP Server Tests", () => {
       const response2 = await fetch(`http://localhost:${serverPort}/test2`);
 
       expect(response2.status).toBe(200);
+
       const data2 = await response2.json() as Test2Response;
 
       expect(data2.message).toBe("test2 endpoint");
@@ -78,6 +76,7 @@ describe("MCP Chrome Debugger Protocol - HTTP Server Tests", () => {
       const healthResponse = await fetch(`http://localhost:${serverPort}/health`);
 
       expect(healthResponse.status).toBe(200);
+
       const healthData = await healthResponse.json() as HealthResponse;
 
       expect(healthData.status).toBe("ok");
@@ -91,13 +90,11 @@ describe("MCP Chrome Debugger Protocol - HTTP Server Tests", () => {
       expect(port).toBeDefined();
       expect(serverPort).toBeDefined();
 
-      // Give the server a moment to fully start
-      await setTimeout(2000);
-
       // Verify both debugger and HTTP server are working
       const response = await fetch(`http://localhost:${serverPort}/test1`);
 
       expect(response.status).toBe(200);
+
       const data = await response.json() as Test1Response;
 
       expect(data.message).toBe("test1 endpoint");

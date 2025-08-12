@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import path from "path";
 import fs from "fs";
 import { setTimeout } from "node:timers/promises";
@@ -138,7 +138,6 @@ export class TestAppManager {
       let serverReady = false;
       let debugInfo: { port: number; webSocketUrl: string } | null = null;
       let serverPort: number | null = null;
-
       const tryResolve = () => {
         if (debuggerReady && serverReady && debugInfo) {
           resolve({
@@ -200,7 +199,6 @@ export class TestAppManager {
 
     // Use modern Promise-based approach with async/await
     let processExited = false;
-
     const exitPromise = new Promise<void>((resolve) => {
       if (!this.process) {
         resolve();
@@ -222,14 +220,14 @@ export class TestAppManager {
           if (!processExited && this.process && !this.process.killed) {
             this.process.kill("SIGKILL");
           }
-        })
+        }),
       ]);
     } catch {
       // Ignore timeout errors
     }
 
     // Remove PID from tracked processes
-    if (this.process?.pid) {
+    if (this.process.pid) {
       spawnedProcesses.delete(this.process.pid);
     }
 
@@ -255,7 +253,6 @@ export class TestAppManager {
 
     return new Promise((resolve, reject) => {
       let debuggerReady = false;
-
       // Listen for debugger startup message
       const stderrHandler = (data: Buffer) => {
         const output = data.toString();
@@ -269,7 +266,6 @@ export class TestAppManager {
           resolve(debugInfo.port);
         }
       };
-
       // Listen for process exit
       const exitHandler = (code: number | null) => {
         if (!debuggerReady) {
@@ -337,7 +333,7 @@ export class TestAppManager {
       const match = stderrOutput.match(pattern);
 
       if (match) {
-        if (match[1]?.startsWith('ws://')) {
+        if (match[1].startsWith('ws://')) {
           // Full WebSocket URL found
           const webSocketUrl = match[1];
           // Extract port from IPv4 or IPv6 URL
@@ -346,7 +342,7 @@ export class TestAppManager {
           if (portMatch) {
             return {
               port: parseInt(portMatch[1]),
-              webSocketUrl
+              webSocketUrl,
             };
           }
         } else if (match[1]) {
@@ -355,7 +351,7 @@ export class TestAppManager {
 
           return {
             port,
-            webSocketUrl: `ws://127.0.0.1:${port}`
+            webSocketUrl: `ws://127.0.0.1:${port}`,
           };
         }
       }
