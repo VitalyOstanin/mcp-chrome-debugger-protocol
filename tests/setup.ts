@@ -10,17 +10,9 @@ beforeAll(async () => {
   // Build the main project
   execSync("npm run build", { cwd: path.resolve(__dirname, ".."), stdio: "pipe" });
 
-  // Build TypeScript test application
-  const testAppPath = path.resolve(__dirname, "fixtures/test-app");
-
-  execSync("npm install", { cwd: testAppPath, stdio: "pipe" });
-  execSync("npm run build", { cwd: testAppPath, stdio: "pipe" });
-
-  // Setup JavaScript test application
-  const testAppJsPath = path.resolve(__dirname, "fixtures/test-app-js");
-
-  execSync("npm install", { cwd: testAppJsPath, stdio: "pipe" });
-
+  // Use prebuilt TypeScript fixture (dist is committed); no local install/build
+  // const testAppPath = path.resolve(__dirname, "fixtures/test-app");
+  // JavaScript test application uses vendored node_modules (no install step)
   // Create global MCP client
   const serverPath = path.resolve(__dirname, "../dist/index.js");
   const client = new MCPClient(serverPath);

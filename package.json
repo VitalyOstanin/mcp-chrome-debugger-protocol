@@ -62,6 +62,8 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "express": "^4.19.0",
+    "get-port": "^7.1.0",
     "@types/chrome-remote-interface": "^0.31.14",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.0.0",
