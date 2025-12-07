@@ -758,8 +758,6 @@ export class NodeJSDebugAdapter extends DebugSession {
   }
 
   private createLogpointExpression(logMessage: string): string {
-    // Build a template string preserving expressions like {expr}
-    const tpl = logMessage.replace(/`/g, "\\`").replace(/\{([^}]+)\}/g, "${$1}");
     // Collect unique placeholder expressions inside {...}
     const exprs = Array.from(new Set((logMessage.match(/\{([^}]+)\}/g) ?? [])
       .map(m => m.slice(1, -1).trim())
@@ -771,6 +769,13 @@ export class NodeJSDebugAdapter extends DebugSession {
       // Use IIFE with try/catch to guard ReferenceErrors and other runtime errors
       return `"${key}":(()=>{try{return ${expr}}catch(_){return undefined}})()`;
     }).join(',');
+
+    // Build message template using __vars values instead of re-evaluating expressions
+    const tpl = logMessage.replace(/`/g, "\\`").replace(/\{([^}]+)\}/g, (_, expr) => {
+      const key = expr.trim().replace(/"/g, '\\"');
+
+      return `\${typeof __vars["${key}"]==="object"?JSON.stringify(__vars["${key}"]):__vars["${key}"]}`;
+    });
 
     // Report via Runtime.addBinding binding with rich JSON payload; swallow errors; never pause (return false)
     return `(()=>{try{const __vars={${varsEntries}};typeof __mcpLogPoint==='function'&&__mcpLogPoint(JSON.stringify({message:\`${tpl}\`,vars:__vars,time:Date.now()}))}catch(_){};return false})()`;

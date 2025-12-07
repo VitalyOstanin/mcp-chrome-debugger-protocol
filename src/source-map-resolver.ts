@@ -275,7 +275,7 @@ export class SourceMapResolver {
             const matchedSource = map.sources.find(source => {
               if (!source) return false;
 
-              const normalizedSource = source.replace(/^\.\.\//, '').replace(/\\/g, '/');
+              const normalizedSource = source.replace(/^(\.\.\/)+/, '').replace(/\\/g, '/');
               const normalizedOriginal = originalSource.replace(/\\/g, '/');
 
               return normalizedSource.endsWith(normalizedOriginal) ||
