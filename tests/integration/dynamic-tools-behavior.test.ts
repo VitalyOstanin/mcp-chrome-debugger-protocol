@@ -108,7 +108,7 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
       // Step 1: Try debugging tool without connection (runtime validation)
       const invalidResult = await mcpClient.callTool('setBreakpoints', {
         source: { path: '/test.js' },
-        breakpoints: [{ line: 1, column: 0, logMessage: 'test' }],
+        breakpoints: [{ line: 1, column: 1, logMessage: 'test' }],
       });
 
       expect(invalidResult.content[0].text).toContain('is disabled');
@@ -121,7 +121,7 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
 
       const validResult = await mcpClient.callTool('setBreakpoints', {
         source: { path: testApp.getMainFilePath() },
-        breakpoints: [{ line: 10, column: 0, logMessage: 'Runtime validation success!' }],
+        breakpoints: [{ line: 10, column: 1, logMessage: 'Runtime validation success!' }],
       });
       const result = JSON.parse(validResult.content[0].text);
 
@@ -142,7 +142,7 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
         // Test tool availability
         const result = await mcpClient.callTool('setBreakpoints', {
           source: { path: testApp.getMainFilePath() },
-          breakpoints: [{ line: 5 + i, column: 0, logMessage: `Cycle ${i + 1} test` }],
+          breakpoints: [{ line: 5 + i, column: 1, logMessage: `Cycle ${i + 1} test` }],
         });
         const parsedResult = JSON.parse(result.content[0].text);
 
@@ -178,7 +178,7 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
       // Helpful error without connection
       const helpfulError = await mcpClient.callTool('setBreakpoints', {
         source: { path: '/test.js' },
-        breakpoints: [{ line: 1, column: 0, logMessage: 'test' }],
+        breakpoints: [{ line: 1, column: 1, logMessage: 'test' }],
       });
 
       expect(helpfulError.content[0].text).toContain('disabled');
@@ -191,7 +191,7 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
 
       const workingResult = await mcpClient.callTool('setBreakpoints', {
         source: { path: testApp.getMainFilePath() },
-        breakpoints: [{ line: 8, column: 0, logMessage: 'UX improvement verified!' }],
+        breakpoints: [{ line: 8, column: 1, logMessage: 'UX improvement verified!' }],
       });
       const workingResultData = JSON.parse(workingResult.content[0].text);
 

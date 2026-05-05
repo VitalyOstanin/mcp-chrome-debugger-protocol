@@ -11,34 +11,6 @@ export class DAPDebuggerManager {
 
   constructor(private readonly dapClient: DAPClient) {}
 
-  private createStandardResponse(successMessage: string, errorMessage: string) {
-    return {
-      success: (result?: unknown, additionalData?: Record<string, unknown>) => ({
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              success: true,
-              message: successMessage,
-              ...(additionalData ?? {}),
-            }),
-          },
-        ],
-      }),
-      error: (error: unknown) => ({
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              error: errorMessage,
-              message: error instanceof Error ? error.message : String(error),
-            }),
-          },
-        ],
-      }),
-    };
-  }
-
   private truncateResult(data: unknown, options: TruncationOptions = {}): { result: unknown; truncated: boolean } {
     const {
       maxLength = 20000,
@@ -155,154 +127,6 @@ export class DAPDebuggerManager {
     return process.cwd();
   }
 
-  private getRelativePath(absolutePath: string): string {
-    const projectRoot = this.findProjectRoot();
-
-    return relative(projectRoot, absolutePath);
-  }
-
-  async setBreakpoint(filePath: string, lineNumber: number, columnNumber: number, condition?: string) {
-    return withErrorHandling(async () => {
-      // Resolve absolute path
-      const absolutePath = resolve(filePath);
-      // Create DAP setBreakpoints request
-      const breakpointsArgs: DebugProtocol.SetBreakpointsArguments = {
-        source: {
-          name: relative(this.findProjectRoot(), absolutePath),
-          path: absolutePath,
-        },
-        lines: [lineNumber],
-        breakpoints: [{
-          line: lineNumber,
-          column: columnNumber,
-          condition,
-        }],
-      };
-      const response = await this.dapClient.dapRequest<DebugProtocol.SetBreakpointsResponse>(
-        'setBreakpoints',
-        breakpointsArgs,
-      );
-
-      if (!(response.success && response.body.breakpoints[0])) {
-        throw new Error("Failed to set breakpoint");
-      }
-
-      const actualBreakpoint = response.body.breakpoints[0];
-
-      // Track the breakpoint
-      this.dapClient.addTrackedBreakpoint({
-        breakpointId: actualBreakpoint.id!,
-        type: 'breakpoint',
-        originalRequest: {
-          filePath: absolutePath,
-          lineNumber,
-          columnNumber,
-          condition,
-        },
-        actualLocation: {
-          scriptId: undefined, // DAP doesn't use scriptId
-          lineNumber: actualBreakpoint.line ?? lineNumber,
-          columnNumber: actualBreakpoint.column ?? columnNumber,
-        },
-        sourceMapResolution: {
-          used: false, // DAP handles source maps internally
-        },
-        timestamp: new Date(),
-      });
-
-      return {
-        breakpointId: actualBreakpoint.id!,
-        actualLocation: {
-          lineNumber: actualBreakpoint.line ?? lineNumber,
-          columnNumber: actualBreakpoint.column ?? columnNumber,
-        },
-        originalRequest: {
-          filePath: absolutePath,
-          lineNumber,
-          columnNumber,
-          condition,
-        },
-        sourceMapResolution: {
-          used: false,
-        },
-        verified: actualBreakpoint.verified,
-      };
-    }, { operation: 'set breakpoint', filePath, lineNumber, columnNumber, condition });
-  }
-
-  async setLogpoint(filePath: string, lineNumber: number, columnNumber: number, logMessage: string) {
-    return withErrorHandling(async () => {
-      // Resolve absolute path
-      const absolutePath = resolve(filePath);
-      // Create DAP setBreakpoints request with logMessage (this is the key feature!)
-      const breakpointsArgs: DebugProtocol.SetBreakpointsArguments = {
-        source: {
-          name: relative(this.findProjectRoot(), absolutePath),
-          path: absolutePath,
-        },
-        lines: [lineNumber],
-        breakpoints: [{
-          line: lineNumber,
-          column: columnNumber,
-          logMessage, // This enables variable interpolation with {variable} syntax!
-        }],
-      };
-      const response = await this.dapClient.dapRequest<DebugProtocol.SetBreakpointsResponse>(
-        'setBreakpoints',
-        breakpointsArgs,
-      );
-
-      if (!(response.success && response.body.breakpoints[0])) {
-        throw new Error("Failed to set logpoint");
-      }
-
-      const actualBreakpoint = response.body.breakpoints[0];
-
-      // Track the logpoint
-      this.dapClient.addTrackedBreakpoint({
-        breakpointId: actualBreakpoint.id!,
-        type: 'logpoint',
-        originalRequest: {
-          filePath: absolutePath,
-          lineNumber,
-          columnNumber,
-          logMessage,
-        },
-        actualLocation: {
-          scriptId: undefined,
-          lineNumber: actualBreakpoint.line ?? lineNumber,
-          columnNumber: actualBreakpoint.column ?? columnNumber,
-        },
-        sourceMapResolution: {
-          used: false,
-        },
-        timestamp: new Date(),
-      });
-
-      return {
-        breakpointId: actualBreakpoint.id!,
-        actualLocation: {
-          lineNumber: actualBreakpoint.line ?? lineNumber,
-          columnNumber: actualBreakpoint.column ?? columnNumber,
-        },
-        originalRequest: {
-          filePath: absolutePath,
-          lineNumber,
-          columnNumber,
-          logMessage,
-        },
-        logMessage,
-        type: "logpoint",
-        sourceMapResolution: {
-          used: false,
-          reason: "DAP handles source maps and variable interpolation internally",
-        },
-        verified: actualBreakpoint.verified,
-        interpolationSupport: true, // Key feature - DAP supports {variable} interpolation!
-      };
-    }, { operation: 'set logpoint', filePath, lineNumber, columnNumber, logMessage });
-  }
-
   async removeBreakpoint(breakpointId: number) {
     return withErrorHandling(async () => {
       // Find the tracked breakpoint to get source info
@@ -347,395 +171,130 @@ export class DAPDebuggerManager {
     }, { operation: 'list breakpoints' });
   }
 
-  async resume() {
-    const responseFactory = this.createStandardResponse(
-      "Execution resumed",
-      "Failed to resume execution",
-    );
-
-    try {
-      await this.dapClient.dapRequest('continue', { threadId: 1 });
-
-      return responseFactory.success();
-    } catch (error) {
-      return responseFactory.error(error);
-    }
-  }
-
-  // DAP standard name for resume
+  // DAP-standard execution control. Each method delegates to the adapter via dapRequest;
+  // duplicated legacy aliases (resume/stepInto/stepOver) have been removed.
   async continue(threadId?: number) {
-    const responseFactory = this.createStandardResponse(
-      "Execution continued",
-      "Failed to continue execution",
-    );
+    const effectiveThreadId = threadId ?? 1;
 
-    try {
-      await this.dapClient.dapRequest('continue', { threadId: threadId ?? 1 });
+    return withErrorHandling(async () => {
+      await this.dapClient.dapRequest('continue', { threadId: effectiveThreadId });
 
-      return responseFactory.success(undefined, { threadId: threadId ?? 1 });
-    } catch (error) {
-      return responseFactory.error(error);
-    }
+      return { threadId: effectiveThreadId, message: 'Execution continued' };
+    }, { operation: 'continue execution', threadId: effectiveThreadId });
   }
 
-  async pause() {
-    const responseFactory = this.createStandardResponse(
-      "Execution paused",
-      "Failed to pause execution",
-    );
+  async pause(threadId?: number) {
+    const effectiveThreadId = threadId ?? 1;
 
-    try {
-      await this.dapClient.dapRequest('pause', { threadId: 1 });
+    return withErrorHandling(async () => {
+      await this.dapClient.dapRequest('pause', { threadId: effectiveThreadId });
 
-      return responseFactory.success();
-    } catch (error) {
-      return responseFactory.error(error);
-    }
+      return { threadId: effectiveThreadId, message: 'Execution paused' };
+    }, { operation: 'pause execution', threadId: effectiveThreadId });
   }
 
-  async stepOver() {
-    const responseFactory = this.createStandardResponse(
-      "Stepped over",
-      "Failed to step over",
-    );
-
-    try {
-      await this.dapClient.dapRequest('next', { threadId: 1 });
-
-      return responseFactory.success();
-    } catch (error) {
-      return responseFactory.error(error);
-    }
-  }
-
-  async stepInto() {
-    const responseFactory = this.createStandardResponse(
-      "Stepped into",
-      "Failed to step into",
-    );
-
-    try {
-      await this.dapClient.dapRequest('stepIn', { threadId: 1 });
-
-      return responseFactory.success();
-    } catch (error) {
-      return responseFactory.error(error);
-    }
-  }
-
-  async stepOut() {
-    const responseFactory = this.createStandardResponse(
-      "Stepped out",
-      "Failed to step out",
-    );
-
-    try {
-      await this.dapClient.dapRequest('stepOut', { threadId: 1 });
-
-      return responseFactory.success();
-    } catch (error) {
-      return responseFactory.error(error);
-    }
-  }
-
-  // DAP standard names for step operations
   async next(threadId?: number) {
-    const responseFactory = this.createStandardResponse(
-      "Stepped over (next)",
-      "Failed to step over (next)",
-    );
+    const effectiveThreadId = threadId ?? 1;
 
-    try {
-      await this.dapClient.dapRequest('next', { threadId: threadId ?? 1 });
+    return withErrorHandling(async () => {
+      await this.dapClient.dapRequest('next', { threadId: effectiveThreadId });
 
-      return responseFactory.success(undefined, { threadId: threadId ?? 1 });
-    } catch (error) {
-      return responseFactory.error(error);
-    }
+      return { threadId: effectiveThreadId, message: 'Stepped over' };
+    }, { operation: 'step over', threadId: effectiveThreadId });
   }
 
   async stepIn(threadId?: number) {
-    const responseFactory = this.createStandardResponse(
-      "Stepped into",
-      "Failed to step into",
-    );
+    const effectiveThreadId = threadId ?? 1;
 
-    try {
-      await this.dapClient.dapRequest('stepIn', { threadId: threadId ?? 1 });
+    return withErrorHandling(async () => {
+      await this.dapClient.dapRequest('stepIn', { threadId: effectiveThreadId });
 
-      return responseFactory.success(undefined, { threadId: threadId ?? 1 });
-    } catch (error) {
-      return responseFactory.error(error);
-    }
+      return { threadId: effectiveThreadId, message: 'Stepped into' };
+    }, { operation: 'step into', threadId: effectiveThreadId });
   }
 
-  async evaluate(expression: string, callFrameId?: string, options: TruncationOptions = {}) {
-    const response = await this.dapClient.dapRequest<DebugProtocol.EvaluateResponse>(
-      'evaluate',
-      {
-        expression,
-        frameId: callFrameId ? parseInt(callFrameId, 10) : undefined,
-        context: 'repl',
-      },
-    );
-    const { result: truncatedResult, truncated } = this.truncateResult(response.body, options);
+  async stepOut(threadId?: number) {
+    const effectiveThreadId = threadId ?? 1;
 
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            result: truncatedResult,
-            ...(truncated && {
-              meta: {
-                truncated: true,
-                message: "Response was truncated due to size limits",
-              },
-            }),
-          }, null, 2),
-        },
-      ],
-    };
+    return withErrorHandling(async () => {
+      await this.dapClient.dapRequest('stepOut', { threadId: effectiveThreadId });
+
+      return { threadId: effectiveThreadId, message: 'Stepped out' };
+    }, { operation: 'step out', threadId: effectiveThreadId });
   }
 
-  async getCallStack(options: TruncationOptions = {}) {
-    try {
-      // Get threads first
-      const threadsResponse = await this.dapClient.dapRequest<DebugProtocol.ThreadsResponse>('threads', {});
-
-      if (!(threadsResponse.success && threadsResponse.body.threads.length)) {
-        throw new Error('No threads available');
-      }
-
-      const threadId = threadsResponse.body.threads[0].id;
-      // Get stack trace
-      const stackResponse = await this.dapClient.dapRequest<DebugProtocol.StackTraceResponse>(
-        'stackTrace',
+  async evaluate(expression: string, frameId?: number, options: TruncationOptions = {}) {
+    return withErrorHandling(async () => {
+      const response = await this.dapClient.dapRequest<DebugProtocol.EvaluateResponse>(
+        'evaluate',
         {
-          threadId,
-          startFrame: 0,
-          levels: 20,
+          expression,
+          frameId,
+          context: 'repl',
         },
       );
-      const { result: truncatedResult, truncated } = this.truncateResult(stackResponse.body, options);
+      const { result: truncatedResult, truncated } = this.truncateResult(response.body, options);
 
       return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              result: truncatedResult,
-              ...(truncated && {
-                meta: {
-                  truncated: true,
-                  message: "Call stack was truncated due to size limits",
-                },
-              }),
-            }, null, 2),
+        result: truncatedResult,
+        ...(truncated && {
+          meta: {
+            truncated: true,
+            message: 'Response was truncated due to size limits',
           },
-        ],
+        }),
       };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              result: [],
-              message: "No call stack available",
-              error: error instanceof Error ? error.message : String(error),
-            }),
-          },
-        ],
-      };
-    }
-  }
-
-  async getScopeVariables(callFrameId: string, options: TruncationOptions = {}) {
-    try {
-      const frameId = parseInt(callFrameId, 10);
-      // Get scopes for the frame
-      const scopesResponse = await this.dapClient.dapRequest<DebugProtocol.ScopesResponse>(
-        'scopes',
-        { frameId },
-      );
-
-      if (!(scopesResponse.success && scopesResponse.body.scopes.length)) {
-        throw new Error('No scopes available');
-      }
-
-      // Get variables from the first scope (usually local scope)
-      const variablesResponse = await this.dapClient.dapRequest<DebugProtocol.VariablesResponse>(
-        'variables',
-        { variablesReference: scopesResponse.body.scopes[0].variablesReference },
-      );
-      const { result: truncatedResult, truncated } = this.truncateResult(variablesResponse.body, options);
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              result: truncatedResult,
-              ...(truncated && {
-                meta: {
-                  truncated: true,
-                  message: "Scope variables were truncated due to size limits",
-                },
-              }),
-            }, null, 2),
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              error: "Failed to get scope variables",
-              message: error instanceof Error ? error.message : String(error),
-            }),
-          },
-        ],
-      };
-    }
+    }, { operation: 'evaluate expression', expression, frameId });
   }
 
   async getLogpointHits() {
-    try {
+    return withErrorHandling(() => {
       const hits = this.dapClient.getLogpointHits();
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              hits: hits.map(hit => ({
-                timestamp: hit.timestamp.toISOString(),
-                executionContextId: hit.executionContextId,
-                message: hit.message,
-                payloadRaw: hit.payloadRaw,
-                payload: hit.payload,
-                level: hit.level ?? 'info',
-              })),
-              totalCount: hits.length,
-              interpolationSupport: true,
-            }),
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              error: "Failed to get logpoint hits",
-              message: error instanceof Error ? error.message : String(error),
-              hits: [],
-              totalCount: 0,
-            }),
-          },
-        ],
-      };
-    }
+      return Promise.resolve({
+        hits: hits.map(hit => ({
+          timestamp: hit.timestamp.toISOString(),
+          executionContextId: hit.executionContextId,
+          message: hit.message,
+          payloadRaw: hit.payloadRaw,
+          payload: hit.payload,
+          level: hit.level ?? 'info',
+        })),
+        totalCount: hits.length,
+        interpolationSupport: true,
+      });
+    }, { operation: 'get logpoint hits' });
   }
 
   async clearLogpointHits() {
-    try {
+    return withErrorHandling(() => {
       this.dapClient.clearLogpointHits();
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              success: true,
-              message: "Logpoint hits cleared successfully",
-            }),
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              error: "Failed to clear logpoint hits",
-              message: error instanceof Error ? error.message : String(error),
-            }),
-          },
-        ],
-      };
-    }
+      return Promise.resolve({ message: 'Logpoint hits cleared successfully' });
+    }, { operation: 'clear logpoint hits' });
   }
 
   async getDebuggerEvents() {
-    try {
+    return withErrorHandling(() => {
       const events = this.dapClient.getDebuggerEvents();
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              events: events.map(event => ({
-                timestamp: event.timestamp.toISOString(),
-                type: event.type,
-                data: event.data,
-              })),
-              totalCount: events.length,
-            }),
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              error: "Failed to get debugger events",
-              message: error instanceof Error ? error.message : String(error),
-              events: [],
-              totalCount: 0,
-            }),
-          },
-        ],
-      };
-    }
+      return Promise.resolve({
+        events: events.map(event => ({
+          timestamp: event.timestamp.toISOString(),
+          type: event.type,
+          data: event.data,
+        })),
+        totalCount: events.length,
+      });
+    }, { operation: 'get debugger events' });
   }
 
   async clearDebuggerEvents() {
-    try {
+    return withErrorHandling(() => {
       this.dapClient.clearDebuggerEvents();
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              success: true,
-              message: "Debugger events cleared successfully",
-            }),
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              error: "Failed to clear debugger events",
-              message: error instanceof Error ? error.message : String(error),
-            }),
-          },
-        ],
-      };
-    }
+      return Promise.resolve({ message: 'Debugger events cleared successfully' });
+    }, { operation: 'clear debugger events' });
   }
 
   async resolveOriginalPosition(generatedLine: number, generatedColumn: number, sourceMapPaths?: string[]) {

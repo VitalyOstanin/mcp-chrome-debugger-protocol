@@ -1,7 +1,5 @@
 // Utility functions and constants for MCP DAP Debugger Protocol
 import { setTimeout } from "node:timers/promises";
-import { readFileSync, existsSync } from "node:fs";
-// SourceMapResolver removed - DAP handles source maps internally
 
 // Common error messages
 export const ERROR_MESSAGES = {
@@ -21,6 +19,7 @@ export interface MCPResponse {
 export interface ErrorResponse {
   success: false;
   error: string;
+  message?: string;
   code: string;
   details?: Record<string, unknown>;
 }
@@ -42,6 +41,7 @@ export function createErrorResponse(
   const response: ErrorResponse = {
     success: false,
     error,
+    ...(message !== undefined && { message }),
     code,
     ...(details && { details }),
   };
@@ -97,93 +97,3 @@ export function requireConnection(isConnected: boolean): void {
 
 // Utility function for delays using Node.js promise timers
 export const sleep = setTimeout;
-
-// Source code context utilities
-
-export interface SourceCodeContext {
-  filePath: string;
-  targetLine: number;
-  lines: Array<{
-    number: number;
-    content: string;
-    isTarget: boolean;
-  }>;
-  markerType: 'breakpoint' | 'logpoint';
-  recommendation: string;
-}
-
-export interface SourceContextOptions {
-  contextLines?: number;
-  useSourceMaps?: boolean;
-  markerType?: 'breakpoint' | 'logpoint';
-}
-
-/**
- * Extract source code context around a specific line, with source map support
- */
-export async function getSourceCodeContext(
-  filePath: string,
-  lineNumber: number,
-  columnNumber = 0,
-  options: SourceContextOptions = {},
-): Promise<SourceCodeContext | null> {
-  const {
-    contextLines = 10,
-    useSourceMaps = true,
-    markerType = 'breakpoint',
-  } = options;
-  let targetFilePath = filePath;
-  let targetLineNumber = lineNumber;
-
-  // For TypeScript files, use them directly as they are the original source
-  if (filePath.endsWith('.ts')) {
-    targetFilePath = filePath;
-    targetLineNumber = lineNumber;
-  } else if (useSourceMaps && filePath.endsWith('.js')) {
-    // DAP handles source maps automatically
-    targetFilePath = filePath;
-    targetLineNumber = lineNumber;
-    void columnNumber; // Available but not needed - DAP handles source map resolution
-  }
-
-  // Check if the target file exists
-  if (!existsSync(targetFilePath)) {
-    return null;
-  }
-
-  try {
-    const fileContent = readFileSync(targetFilePath, 'utf-8');
-    const lines = fileContent.split('\n');
-    // Calculate context range
-    const startLine = Math.max(1, targetLineNumber - contextLines);
-    const endLine = Math.min(lines.length, targetLineNumber + contextLines);
-    // Extract context lines with metadata
-    const extractedLines: Array<{
-      number: number;
-      content: string;
-      isTarget: boolean;
-    }> = [];
-
-    for (let i = startLine - 1; i < endLine; i++) {
-      extractedLines.push({
-        number: i + 1,
-        content: lines[i] || '',
-        isTarget: i + 1 === targetLineNumber,
-      });
-    }
-
-    const recommendation = markerType === 'breakpoint'
-      ? "Display this source context with line numbers. Show a red circle marker for the breakpoint line, similar to VS Code debugger."
-      : "Display this source context with line numbers. Show a green circle marker for the logpoint line.";
-
-    return {
-      filePath: targetFilePath,
-      targetLine: targetLineNumber,
-      lines: extractedLines,
-      markerType,
-      recommendation,
-    };
-  } catch {
-    return null;
-  }
-}

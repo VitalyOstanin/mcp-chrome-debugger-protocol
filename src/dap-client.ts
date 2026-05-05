@@ -14,6 +14,10 @@ export interface DAPConnection {
 }
 
 export class DAPClient extends EventEmitter {
+  // Keep buffers bounded to avoid unbounded memory growth on long debugging sessions.
+  // FIFO semantics: when full, the oldest entry is dropped.
+  private static readonly MAX_BUFFER_SIZE = 10_000;
+
   private readonly connection: DAPConnection = {
     adapter: null,
     isConnected: false,
@@ -23,6 +27,20 @@ export class DAPClient extends EventEmitter {
   private readonly trackedBreakpoints: Map<number, TrackedBreakpoint> = new Map();
   private nextRequestId = 1;
   private readonly pendingRequests = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+
+  private appendLogpointHit(hit: LogpointHit): void {
+    this.logpointHits.push(hit);
+    if (this.logpointHits.length > DAPClient.MAX_BUFFER_SIZE) {
+      this.logpointHits.splice(0, this.logpointHits.length - DAPClient.MAX_BUFFER_SIZE);
+    }
+  }
+
+  private appendDebuggerEvent(event: DebuggerEvent): void {
+    this.debuggerEvents.push(event);
+    if (this.debuggerEvents.length > DAPClient.MAX_BUFFER_SIZE) {
+      this.debuggerEvents.splice(0, this.debuggerEvents.length - DAPClient.MAX_BUFFER_SIZE);
+    }
+  }
 
   constructor() {
     super();
@@ -107,7 +125,7 @@ export class DAPClient extends EventEmitter {
           level: 'info',
         } as const;
 
-        this.logpointHits.push(hit);
+        this.appendLogpointHit(hit);
         this.emit('logpointHit', hit);
       } else if (event.event === 'terminated') {
         this.handleTerminatedEvent();
@@ -129,7 +147,7 @@ export class DAPClient extends EventEmitter {
       },
     };
 
-    this.debuggerEvents.push(debuggerEvent);
+    this.appendDebuggerEvent(debuggerEvent);
     this.emit('debuggerPaused', debuggerEvent);
   }
 
@@ -156,7 +174,7 @@ export class DAPClient extends EventEmitter {
       data: { reason: 'terminated' },
     };
 
-    this.debuggerEvents.push(debuggerEvent);
+    this.appendDebuggerEvent(debuggerEvent);
     this.emit('debuggerTerminated', debuggerEvent);
   }
 
@@ -167,7 +185,7 @@ export class DAPClient extends EventEmitter {
       data: {},
     };
 
-    this.debuggerEvents.push(debuggerEvent);
+    this.appendDebuggerEvent(debuggerEvent);
     this.emit('debuggerResumed', debuggerEvent);
   }
 
@@ -189,92 +207,110 @@ export class DAPClient extends EventEmitter {
         reject: reject as (error: Error) => void,
       });
 
-      // Route to real adapter public methods where available
+      // Dispatch to real adapter methods (no mock handlers).
       (async () => {
         try {
+          const {adapter} = this.connection;
+
+          if (!adapter) {
+            throw new Error('Debug adapter not available');
+          }
+
+          let response: unknown;
+
           switch (method) {
-            case 'initialize': {
-              // Emit InitializedEvent and return a minimal success response
-              const response: DebugProtocol.InitializeResponse = {
+            case 'initialize':
+              response = this.buildInitializeResponse(requestId);
+              break;
+            case 'attach': {
+              const attachResult = await adapter.attach(params as NodeJSAttachRequestArguments);
+
+              if (!attachResult.success) {
+                throw new Error(attachResult.message ?? 'Attach failed');
+              }
+
+              this.connection.isConnected = true;
+              this.emitStateChange(true);
+
+              response = {
                 seq: 0,
                 type: 'response',
                 request_seq: requestId,
-                command: 'initialize',
+                command: 'attach',
                 success: true,
-                body: {
-                  supportsConfigurationDoneRequest: true,
-                  supportsEvaluateForHovers: true,
-                  supportsLogPoints: true,
-                  supportsConditionalBreakpoints: true,
-                  supportsHitConditionalBreakpoints: true,
-                  supportsSetVariable: true,
-                  supportsCompletionsRequest: true,
-                },
-              };
-
-              this.resolveRequest(requestId, response);
+              } as DebugProtocol.AttachResponse;
               break;
             }
-            case 'attach': {
-              const result = await this.connection.adapter!.attach(params as NodeJSAttachRequestArguments);
-
-              if (result.success) {
-                this.connection.isConnected = true;
-                this.emitStateChange(true);
-
-                const response: DebugProtocol.AttachResponse = {
-                  seq: 0,
-                  type: 'response',
-                  request_seq: requestId,
-                  command: 'attach',
-                  success: true,
-                };
-
-                this.resolveRequest(requestId, response);
-              } else {
-                throw new Error(result.message ?? 'Attach failed');
-              }
-              break;
-            }
-            case 'setBreakpoints': {
-              const response = await this.connection.adapter!.setBreakpoints(
-                params as DebugProtocol.SetBreakpointsArguments,
-              );
-
-              this.resolveRequest(requestId, response);
-              break;
-            }
-            // For the rest, fall back to lightweight mock handlers
             case 'launch':
-              this.handleLaunchRequest(requestId, params as NodeJSLaunchRequestArguments);
+              response = await this.buildLaunchResponse(requestId, params as NodeJSLaunchRequestArguments);
+              break;
+            case 'setBreakpoints':
+              response = await adapter.setBreakpoints(params as DebugProtocol.SetBreakpointsArguments);
               break;
             case 'continue':
-              this.handleContinueRequest(requestId, params as DebugProtocol.ContinueArguments);
+              response = await adapter.continueExecution(params as DebugProtocol.ContinueArguments);
               break;
             case 'pause':
-              this.handlePauseRequest(requestId, params as DebugProtocol.PauseArguments);
+              response = await adapter.pauseExecution(params as DebugProtocol.PauseArguments);
               break;
             case 'stepIn':
-              this.handleStepInRequest(requestId, params as DebugProtocol.StepInArguments);
+              response = await adapter.stepIn(params as DebugProtocol.StepInArguments);
               break;
             case 'stepOut':
-              this.handleStepOutRequest(requestId, params as DebugProtocol.StepOutArguments);
+              response = await adapter.stepOut(params as DebugProtocol.StepOutArguments);
               break;
             case 'next':
-              this.handleNextRequest(requestId, params as DebugProtocol.NextArguments);
+              response = await adapter.next(params as DebugProtocol.NextArguments);
               break;
             case 'evaluate':
-              this.handleEvaluateRequest(requestId, params as DebugProtocol.EvaluateArguments);
+              response = await adapter.evaluate(params as DebugProtocol.EvaluateArguments);
               break;
             case 'stackTrace':
-              this.handleStackTraceRequest(requestId, params as DebugProtocol.StackTraceArguments);
+              response = adapter.stackTrace(params as DebugProtocol.StackTraceArguments);
               break;
             case 'threads':
-              this.handleThreadsRequest(requestId, params as Record<string, unknown>);
+              response = adapter.threads();
+              break;
+            case 'scopes':
+              response = adapter.scopes(params as DebugProtocol.ScopesArguments);
+              break;
+            case 'variables':
+              response = await adapter.variables(params as DebugProtocol.VariablesArguments);
+              break;
+            case 'setVariable':
+              response = await adapter.setVariable(params as DebugProtocol.SetVariableArguments);
+              break;
+            case 'loadedSources':
+              response = adapter.loadedSources();
+              break;
+            case 'exceptionInfo':
+              response = adapter.exceptionInfo(params as DebugProtocol.ExceptionInfoArguments);
+              break;
+            case 'setExceptionBreakpoints':
+              response = await adapter.setExceptionBreakpoints(params as DebugProtocol.SetExceptionBreakpointsArguments);
+              break;
+            case 'breakpointLocations':
+              response = await adapter.breakpointLocations(params as DebugProtocol.BreakpointLocationsArguments);
+              break;
+            case 'restartFrame':
+              response = await adapter.restartFrame(params as DebugProtocol.RestartFrameArguments);
+              break;
+            case 'goto':
+              response = adapter.goto(params as DebugProtocol.GotoArguments);
+              break;
+            case 'terminate':
+              response = await adapter.terminate();
+              this.connection.isConnected = false;
+              this.emitStateChange(false);
+              break;
+            case 'restart':
+              response = await adapter.restart();
               break;
             default:
               throw new Error(`Unsupported DAP method: ${method}`);
           }
+
+          this.resolveRequest(requestId, response);
         } catch (error) {
           this.rejectRequest(requestId, error instanceof Error ? error : new Error(String(error)));
         }
@@ -295,10 +331,10 @@ export class DAPClient extends EventEmitter {
     });
   }
 
-  // DAP Request Handlers
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private handleInitializeRequest(requestId: number, _args: DebugProtocol.InitializeRequestArguments): void {
-    const response: DebugProtocol.InitializeResponse = {
+  // ===== Response builders for in-process DAP commands =====
+
+  private buildInitializeResponse(requestId: number): DebugProtocol.InitializeResponse {
+    return {
       seq: 0,
       type: 'response',
       request_seq: requestId,
@@ -312,209 +348,30 @@ export class DAPClient extends EventEmitter {
         supportsHitConditionalBreakpoints: true,
         supportsSetVariable: true,
         supportsCompletionsRequest: true,
+        supportsRestartFrame: true,
+        supportsLoadedSourcesRequest: true,
+        supportsExceptionInfoRequest: true,
+        supportsBreakpointLocationsRequest: true,
       },
     };
-
-    this.resolveRequest(requestId, response);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private async handleLaunchRequest(requestId: number, _args: NodeJSLaunchRequestArguments): Promise<void> {
-    try {
-      // Create mock response for launch
-      const response: DebugProtocol.LaunchResponse = {
-        seq: 0,
-        type: 'response',
-        request_seq: requestId,
-        command: 'launch',
-        success: true,
-      };
+  // launch is not supported in this build (we always attach to a running process). The response
+  // is left as a successful no-op so existing code paths that issue 'launch' do not crash; the
+  // attached adapter is otherwise driven by attach/connectUrl flows.
+  private async buildLaunchResponse(
+    requestId: number,
+    args: NodeJSLaunchRequestArguments,
+  ): Promise<DebugProtocol.LaunchResponse> {
+    void args;
 
-      this.resolveRequest(requestId, response);
-    } catch (error) {
-      this.rejectRequest(requestId, error instanceof Error ? error : new Error(String(error)));
-    }
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private async handleAttachRequest(requestId: number, _args: NodeJSAttachRequestArguments): Promise<void> {
-    try {
-      const response: DebugProtocol.AttachResponse = {
-        seq: 0,
-        type: 'response',
-        request_seq: requestId,
-        command: 'attach',
-        success: true,
-      };
-
-      this.resolveRequest(requestId, response);
-    } catch (error) {
-      this.rejectRequest(requestId, error instanceof Error ? error : new Error(String(error)));
-    }
-  }
-
-  private handleSetBreakpointsRequest(requestId: number, args: DebugProtocol.SetBreakpointsArguments): void {
-    if (!this.connection.adapter) {
-      this.rejectRequest(requestId, new Error('Debug adapter not available'));
-
-      return;
-    }
-
-    // Mock response for setBreakpoints
-    const actualBreakpoints: DebugProtocol.Breakpoint[] = [];
-
-    if (args.breakpoints) {
-      args.breakpoints.forEach((bp: DebugProtocol.SourceBreakpoint, index: number) => {
-        const line = args.lines?.[index] ?? bp.line;
-
-        actualBreakpoints.push({
-          id: Date.now() + index, // Simple ID generation
-          verified: true,
-          line,
-          column: bp.column,
-          source: args.source,
-        });
-      });
-    }
-
-    const response: DebugProtocol.SetBreakpointsResponse = {
+    return {
       seq: 0,
       type: 'response',
       request_seq: requestId,
-      command: 'setBreakpoints',
-      success: true,
-      body: {
-        breakpoints: actualBreakpoints,
-      },
-    };
-
-    this.resolveRequest(requestId, response);
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private handleContinueRequest(requestId: number, _args: DebugProtocol.ContinueArguments): void {
-    const response: DebugProtocol.ContinueResponse = {
-      seq: 0,
-      type: 'response',
-      request_seq: requestId,
-      command: 'continue',
-      success: true,
-      body: { allThreadsContinued: true },
-    };
-
-    this.resolveRequest(requestId, response);
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private handlePauseRequest(requestId: number, _args: DebugProtocol.PauseArguments): void {
-    const response: DebugProtocol.PauseResponse = {
-      seq: 0,
-      type: 'response',
-      request_seq: requestId,
-      command: 'pause',
+      command: 'launch',
       success: true,
     };
-
-    this.resolveRequest(requestId, response);
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private handleStepInRequest(requestId: number, _args: DebugProtocol.StepInArguments): void {
-    const response: DebugProtocol.StepInResponse = {
-      seq: 0,
-      type: 'response',
-      request_seq: requestId,
-      command: 'stepIn',
-      success: true,
-    };
-
-    this.resolveRequest(requestId, response);
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private handleStepOutRequest(requestId: number, _args: DebugProtocol.StepOutArguments): void {
-    const response: DebugProtocol.StepOutResponse = {
-      seq: 0,
-      type: 'response',
-      request_seq: requestId,
-      command: 'stepOut',
-      success: true,
-    };
-
-    this.resolveRequest(requestId, response);
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private handleNextRequest(requestId: number, _args: DebugProtocol.NextArguments): void {
-    const response: DebugProtocol.NextResponse = {
-      seq: 0,
-      type: 'response',
-      request_seq: requestId,
-      command: 'next',
-      success: true,
-    };
-
-    this.resolveRequest(requestId, response);
-  }
-
-  private handleEvaluateRequest(requestId: number, args: DebugProtocol.EvaluateArguments): void {
-    // Mock evaluation - in real implementation would evaluate in debug context
-    const response: DebugProtocol.EvaluateResponse = {
-      seq: 0,
-      type: 'response',
-      request_seq: requestId,
-      command: 'evaluate',
-      success: true,
-      body: {
-        result: `"${args.expression}"`,
-        variablesReference: 0,
-      },
-    };
-
-    this.resolveRequest(requestId, response);
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private handleStackTraceRequest(requestId: number, _args: DebugProtocol.StackTraceArguments): void {
-    const response: DebugProtocol.StackTraceResponse = {
-      seq: 0,
-      type: 'response',
-      request_seq: requestId,
-      command: 'stackTrace',
-      success: true,
-      body: {
-        stackFrames: [
-          {
-            id: 1,
-            name: 'main',
-            line: 1,
-            column: 0,
-            source: { name: 'main.js', path: '/path/to/main.js' },
-          },
-        ],
-        totalFrames: 1,
-      },
-    };
-
-    this.resolveRequest(requestId, response);
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private handleThreadsRequest(requestId: number, _args: Record<string, unknown>): void {
-    const response: DebugProtocol.ThreadsResponse = {
-      seq: 0,
-      type: 'response',
-      request_seq: requestId,
-      command: 'threads',
-      success: true,
-      body: {
-        threads: [
-          { id: 1, name: 'Main Thread' },
-        ],
-      },
-    };
-
-    this.resolveRequest(requestId, response);
   }
 
   private resolveRequest(requestId: number, response: unknown): void {

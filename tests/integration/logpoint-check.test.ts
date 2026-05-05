@@ -1,7 +1,7 @@
 import { MCPClient } from "../utils/mcp-client";
 import { TestAppManager } from "../utils/test-app-manager";
 import { DebuggerTestHelper } from "../utils/debugger-test-helper";
-import { waitForLogpoint } from "../utils/wait-helpers";
+import { unwrapToolPayload, waitForLogpoint } from "../utils/wait-helpers";
 import path from "path";
 
 describe("MCP Chrome Debugger Protocol - TS Logpoint Check", () => {
@@ -48,8 +48,8 @@ describe("MCP Chrome Debugger Protocol - TS Logpoint Check", () => {
         { line: 96, column: 1, logMessage: "fib={fibResult} sum={breakpointResult}" },
       ],
     });
-    const setAData = JSON.parse(setA.content[0].text);
-    const lpA = setAData.data?.breakpoints?.[0];
+    const setAData = unwrapToolPayload<{ breakpoints: Array<{ verified: boolean }> }>(setA);
+    const lpA = setAData.breakpoints[0];
 
     expect(lpA).toBeDefined();
     expect(lpA.verified).toBe(true);
@@ -63,11 +63,11 @@ describe("MCP Chrome Debugger Protocol - TS Logpoint Check", () => {
     );
 
     const hitsA = await mcpClient.callTool("getLogpointHits");
-    const hitsAData = JSON.parse(hitsA.content[0].text);
+    const hitsAData = unwrapToolPayload<{ hits: Array<{ payload?: { message?: string; vars?: Record<string, unknown> } }>; totalCount: number }>(hitsA);
 
     expect(hitsAData.totalCount).toBeGreaterThan(0);
 
-    const payloadA = hitsAData.hits?.[0]?.payload;
+    const payloadA = hitsAData.hits[0]?.payload;
     const msgA: string | undefined = payloadA?.message;
 
     expect(msgA).toBeDefined();
@@ -87,8 +87,8 @@ describe("MCP Chrome Debugger Protocol - TS Logpoint Check", () => {
         { line: 92, column: 1, logMessage: "count={processor.getProcessCount()}" },
       ],
     });
-    const setBData = JSON.parse(setB.content[0].text);
-    const lpB = setBData.data?.breakpoints?.[0];
+    const setBData = unwrapToolPayload<{ breakpoints: Array<{ verified: boolean }> }>(setB);
+    const lpB = setBData.breakpoints[0];
 
     expect(lpB).toBeDefined();
     expect(lpB.verified).toBe(true);
@@ -101,11 +101,11 @@ describe("MCP Chrome Debugger Protocol - TS Logpoint Check", () => {
     );
 
     const hitsB = await mcpClient.callTool("getLogpointHits");
-    const hitsBData = JSON.parse(hitsB.content[0].text);
+    const hitsBData = unwrapToolPayload<{ hits: Array<{ payload?: { message?: string; vars?: Record<string, unknown> } }>; totalCount: number }>(hitsB);
 
     expect(hitsBData.totalCount).toBeGreaterThan(0);
 
-    const payloadB = hitsBData.hits?.[0]?.payload;
+    const payloadB = hitsBData.hits[0]?.payload;
     const msgB: string | undefined = payloadB?.message;
 
     expect(msgB).toBeDefined();
@@ -120,7 +120,9 @@ describe("MCP Chrome Debugger Protocol - TS Logpoint Check", () => {
       originalLine: 96,
       originalColumn: 1,
     });
-    const mapResData = JSON.parse(mapRes.content[0].text);
+    // resolveGeneratedPosition path is not wrapped in withErrorHandling; it returns its own
+    // {success, ...} envelope as content text, so we parse it directly.
+    const mapResData = JSON.parse(mapRes.content[0].text) as { success: boolean; sourceMapUsed?: string };
 
     expect(mapResData.success).toBe(true);
     expect(mapResData.sourceMapUsed).toContain("index.js.map");

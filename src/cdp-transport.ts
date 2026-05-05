@@ -104,22 +104,21 @@ export class CDPTransport extends EventEmitter {
   }
 
   private async handleReconnection(): Promise<void> {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.emit('error', new Error('Max reconnection attempts reached'));
+    while (this.reconnectAttempts < this.maxReconnectAttempts) {
+      this.reconnectAttempts++;
+      this.emit('reconnecting', this.reconnectAttempts);
 
-      return;
+      try {
+        await setTimeout(this.reconnectDelay * this.reconnectAttempts);
+        await this.connect();
+
+        return;
+      } catch (error) {
+        this.emit('reconnect-failed', error);
+      }
     }
 
-    this.reconnectAttempts++;
-    this.emit('reconnecting', this.reconnectAttempts);
-
-    try {
-      await setTimeout(this.reconnectDelay * this.reconnectAttempts);
-      await this.connect();
-    } catch (error) {
-      this.emit('reconnect-failed', error);
-      this.handleReconnection();
-    }
+    this.emit('error', new Error('Max reconnection attempts reached'));
   }
 
   async enableDomains(domains: string[]): Promise<void> {

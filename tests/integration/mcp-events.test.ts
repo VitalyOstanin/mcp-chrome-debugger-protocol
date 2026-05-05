@@ -1,7 +1,7 @@
 import { MCPClient } from "../utils/mcp-client";
 import { TestAppManager } from "../utils/test-app-manager";
 import { DebuggerTestHelper } from "../utils/debugger-test-helper";
-import { waitForLogpoint, waitForLogpointCount, waitForDebuggerEvent } from "../utils/wait-helpers";
+import { unwrapToolPayload, waitForLogpoint, waitForLogpointCount, waitForDebuggerEvent } from "../utils/wait-helpers";
 import path from "path";
 import { setTimeout } from "node:timers/promises";
 
@@ -80,7 +80,7 @@ describe("MCP Chrome Debugger Protocol - MCP Event Notifications", () => {
 
         expect(logHitsResult.isError).toBeFalsy();
 
-        const logHits = JSON.parse(logHitsResult.content[0].text);
+        const logHits = unwrapToolPayload<{ hits: Array<{ payload?: { message?: string }; timestamp?: string }>; totalCount: number }>(logHitsResult);
 
         // Verify structure
         expect(logHits.hits).toBeDefined();
@@ -88,7 +88,7 @@ describe("MCP Chrome Debugger Protocol - MCP Event Notifications", () => {
         expect(logHits.totalCount).toBeDefined();
 
         // Find our specific integration test logpoint
-        const ourLogpoint = logHits.hits.find((hit: { payload?: { message?: string } }) =>
+        const ourLogpoint = logHits.hits.find((hit) =>
           hit.payload?.message?.includes("INTEGRATION_TEST_LOGPOINT"),
         );
 
@@ -101,7 +101,7 @@ describe("MCP Chrome Debugger Protocol - MCP Event Notifications", () => {
           expect(ourLogpoint.timestamp).toBeDefined();
 
           // Verify timestamp is recent (within last 10 seconds)
-          const hitTimestamp = new Date(ourLogpoint.timestamp);
+          const hitTimestamp = new Date(ourLogpoint.timestamp ?? Date.now());
           const now = new Date();
           const timeDiff = now.getTime() - hitTimestamp.getTime();
 
@@ -172,9 +172,9 @@ describe("MCP Chrome Debugger Protocol - MCP Event Notifications", () => {
 
         expect(logHitsResult.isError).toBeFalsy();
 
-        const logHits = JSON.parse(logHitsResult.content[0].text);
+        const logHits = unwrapToolPayload<{ hits: Array<{ payload?: { message?: string }; timestamp?: string }> }>(logHitsResult);
         // Should have captured multiple hits from our test
-        const ourLogpoints = logHits.hits.filter((hit: { payload?: { message?: string } }) =>
+        const ourLogpoints = logHits.hits.filter((hit) =>
           hit.payload?.message?.includes("MULTI_HIT_TEST"),
         );
 
@@ -245,13 +245,13 @@ describe("MCP Chrome Debugger Protocol - MCP Event Notifications", () => {
 
       expect(eventsResult.isError).toBeFalsy();
 
-      const events = JSON.parse(eventsResult.content[0].text);
+      const events = unwrapToolPayload<{ events: Array<{ type?: string; timestamp?: string; data?: unknown }> }>(eventsResult);
 
       expect(events.events).toBeDefined();
       expect(Array.isArray(events.events)).toBe(true);
 
       // Look for pause event
-      const pauseEvent = events.events.find((event: { type?: string }) =>
+      const pauseEvent = events.events.find((event) =>
         event.type === 'paused',
       );
 

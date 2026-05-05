@@ -1,7 +1,7 @@
 import { MCPClient } from "../utils/mcp-client";
 import { TestAppManager } from "../utils/test-app-manager";
 import { DebuggerTestHelper } from "../utils/debugger-test-helper";
-import { waitForLogpoint } from "../utils/wait-helpers";
+import { unwrapToolPayload, waitForLogpoint } from "../utils/wait-helpers";
 import path from "path";
 import { setTimeout } from "node:timers/promises";
 
@@ -116,7 +116,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
         source: { path: mainScriptPath },
         breakpoints: [{
           line: 20,
-          column: 0,
+          column: 1,
           condition: "value > 100",
         }],
       });
@@ -139,7 +139,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
         source: { path: "/invalid/file/path.js" },
         breakpoints: [{
           line: 10,
-          column: 0,
+          column: 1,
         }],
       });
       // CDP actually creates breakpoints for invalid paths but without valid script locations
@@ -166,7 +166,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
         source: { path: mainScriptPath },
         breakpoints: [{
           line: 999999, // Invalid line number
-          column: 0,
+          column: 1,
         }],
       });
       // CDP creates a breakpoint even for invalid line numbers
@@ -225,7 +225,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
         source: { path: mainScriptPath },
         breakpoints: [{
           line: 32, // Always executed in processData()
-          column: 0,
+          column: 1,
           logMessage: "Processing data count: {this.data.length}, process count: {this.processCount}",
         }],
       });
@@ -249,7 +249,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
 
       expect(logHitsResult.isError).toBeFalsy();
 
-      const logHits = JSON.parse(logHitsResult.content[0].text);
+      const logHits = unwrapToolPayload<{ hits: Array<{ message?: string; payload?: { message?: string } }> }>(logHitsResult);
       const hit = logHits.hits.find((h: { message?: string }) => {
         const m = String(h.message ?? "");
 
@@ -258,8 +258,8 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
 
       // Verify that interpolation occurred (numbers present in the message)
       expect(hit).toBeDefined();
-      expect(hit.message).toMatch(/Processing data count: \d+/);
-      expect(hit.message).toMatch(/process count: \d+/);
+      expect(hit?.message).toMatch(/Processing data count: \d+/);
+      expect(hit?.message).toMatch(/process count: \d+/);
     });
 
     it("should handle invalid file path for logpoint", async () => {
@@ -274,7 +274,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
         source: { path: "/invalid/file/path.js" },
         breakpoints: [{
           line: 10,
-          column: 0,
+          column: 1,
           logMessage: "Test log message",
         }],
       });
@@ -532,13 +532,13 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
 
         expect(logHitsResult.isError).toBeFalsy();
 
-        const logHits = JSON.parse(logHitsResult.content[0].text);
+        const logHits = unwrapToolPayload<{ hits: Array<{ payload?: { message?: string }; timestamp?: string }>; totalCount: number }>(logHitsResult);
 
         expect(logHits.hits).toBeDefined();
         expect(Array.isArray(logHits.hits)).toBe(true);
 
         // Find our specific logpoint hit
-        const ourLogpointHit = logHits.hits.find((hit: { payload?: { message?: string } }) =>
+        const ourLogpointHit = logHits.hits.find((hit) =>
           hit.payload?.message?.includes("Logpoint hit in test1 endpoint"),
         );
 
@@ -553,7 +553,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
           expect(ourLogpointHit.payload?.message).toContain("Logpoint hit in test1 endpoint:");
 
           // Verify timestamp is recent (within last 10 seconds)
-          const hitTimestamp = new Date(ourLogpointHit.timestamp);
+          const hitTimestamp = new Date(ourLogpointHit.timestamp ?? Date.now());
           const now = new Date();
           const timeDiff = now.getTime() - hitTimestamp.getTime();
 
@@ -592,7 +592,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
         source: { path: mainScriptPath },
         breakpoints: [{
           line: 101, // Line where userAgent = req.headers['user-agent'] in compiled JS
-          column: 0,
+          column: 1,
           logMessage: "headers: {JSON.stringify(req.headers)}",
         }],
       });
@@ -628,13 +628,13 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
 
       expect(logHitsResult.isError).toBeFalsy();
 
-      const logHits = JSON.parse(logHitsResult.content[0].text);
+      const logHits = unwrapToolPayload<{ hits: Array<{ payload?: { message?: string; vars?: Record<string, unknown> }; timestamp?: string; message?: string }> }>(logHitsResult);
 
       expect(logHits.hits).toBeDefined();
       expect(Array.isArray(logHits.hits)).toBe(true);
 
       // Find our req.headers logpoint hit
-      const headersLogpointHit = logHits.hits.find((hit: { payload?: { message?: string } }) =>
+      const headersLogpointHit = logHits.hits.find((hit) =>
         hit.payload?.message?.includes("headers:"),
       );
 
@@ -646,7 +646,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
         // Vars should include the expression JSON.stringify(req.headers)
         expect(headersLogpointHit.payload?.vars).toBeDefined();
 
-        const vars = headersLogpointHit.payload?.vars as Record<string, unknown> | undefined;
+        const vars = headersLogpointHit.payload?.vars;
 
         expect(Object.prototype.hasOwnProperty.call(vars ?? {}, 'JSON.stringify(req.headers)')).toBe(true);
 
@@ -663,7 +663,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
         }
 
         // Verify timestamp is recent (within last 10 seconds)
-        const hitTimestamp = new Date(headersLogpointHit.timestamp);
+        const hitTimestamp = new Date(headersLogpointHit.timestamp ?? Date.now());
         const now = new Date();
         const timeDiff = now.getTime() - hitTimestamp.getTime();
 
@@ -713,7 +713,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
 
       expect(eventsResult.isError).toBeFalsy();
 
-      const eventsResponse = JSON.parse(eventsResult.content[0].text);
+      const eventsResponse = unwrapToolPayload<{ events: unknown[]; totalCount: number }>(eventsResult);
 
       expect(eventsResponse.events).toBeDefined();
       expect(Array.isArray(eventsResponse.events)).toBe(true);
@@ -740,13 +740,13 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
 
       expect(clearResult.isError).toBeFalsy();
 
-      const clearResponse = JSON.parse(clearResult.content[0].text);
+      const clearEnvelope = JSON.parse(clearResult.content[0].text) as { success: boolean };
 
-      expect(clearResponse.success).toBe(true);
+      expect(clearEnvelope.success).toBe(true);
 
       // Verify events are cleared
       const eventsResult = await mcpClient.callTool("getDebuggerEvents");
-      const eventsResponse = JSON.parse(eventsResult.content[0].text);
+      const eventsResponse = unwrapToolPayload<{ totalCount: number }>(eventsResult);
 
       expect(eventsResponse.totalCount).toBe(0);
     });
@@ -798,7 +798,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
 
       // Check for events
       const eventsResult = await mcpClient.callTool("getDebuggerEvents");
-      const eventsResponse = JSON.parse(eventsResult.content[0].text);
+      const eventsResponse = unwrapToolPayload<{ events: unknown[] }>(eventsResult);
 
       expect(eventsResponse.events).toBeDefined();
       expect(Array.isArray(eventsResponse.events)).toBe(true);
@@ -816,7 +816,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
         source: { path: "/any/file/path.js" },
         breakpoints: [{
           line: 10,
-          column: 0,
+          column: 1,
         }],
       });
 
@@ -839,7 +839,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
         source: { path: mainScriptPath },
         breakpoints: [{
           line: 20,
-          column: 0,
+          column: 1,
           logMessage: "Invalid expression: {this.nonExistentProperty.something}",
         }],
       });
@@ -868,7 +868,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
         source: { path: mainScriptPath },
         breakpoints: [{
           line: 20,
-          column: 0,
+          column: 1,
           condition: "nonExistentVariable === 'something'",
         }],
       });
@@ -898,7 +898,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
         source: { path: "/app/src/index.ts" }, // TypeScript file path
         breakpoints: [{
           line: 10,
-          column: 0,
+          column: 1,
         }],
       });
       const breakpointsData = parseToolResponse<{ breakpoints: BreakpointResponse[] }>(result);
@@ -987,7 +987,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
 
         expect(logHitsResult.isError).toBeFalsy();
 
-        const logHits = JSON.parse(logHitsResult.content[0].text);
+        const logHits = unwrapToolPayload<{ hits: Array<{ payload?: { message?: string }; timestamp?: string }> }>(logHitsResult);
 
         expect(logHits.hits).toBeDefined();
         expect(Array.isArray(logHits.hits)).toBe(true);

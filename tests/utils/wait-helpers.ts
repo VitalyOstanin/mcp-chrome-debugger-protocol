@@ -5,6 +5,28 @@ export interface WaitOptions {
   intervalMs?: number;
 }
 
+// All MCP tools backed by withErrorHandling return { success: true, data: <T> }. A handful of
+// non-manager tools (e.g. getDebuggerState assembled inline in mcp-server.ts) still respond with
+// flat objects. unwrapToolPayload accepts both: it returns parsed.data when present, otherwise
+// the parsed object itself, so callers can rely on a single shape.
+export function unwrapToolPayload<T = unknown>(result: { content: Array<{ text: string }>; isError?: boolean }): T {
+  if (result.isError) {
+    throw new Error(`tool error: ${result.content[0]?.text ?? '<no body>'}`);
+  }
+
+  const parsed = JSON.parse(result.content[0].text) as { success?: boolean; error?: string; message?: string; data?: T } & Record<string, unknown>;
+
+  if (parsed.success === false) {
+    throw new Error(parsed.message ?? parsed.error ?? 'unknown failure');
+  }
+
+  if (parsed.data !== undefined) {
+    return parsed.data;
+  }
+
+  return parsed as unknown as T;
+}
+
 async function waitFor(predicate: () => Promise<boolean>, { timeoutMs = 5000, intervalMs = 100 }: WaitOptions = {}): Promise<void> {
   const deadline = Date.now() + timeoutMs;
 
@@ -29,7 +51,7 @@ export async function waitForLogpoint(
 ): Promise<void> {
   await waitFor(async () => {
     const res = await client.callTool("getLogpointHits");
-    const data = JSON.parse(res.content[0].text) as { hits?: Array<{ message?: string; payload?: { message?: string } }> };
+    const data = unwrapToolPayload<{ hits?: Array<{ message?: string; payload?: { message?: string } }> }>(res);
     const hits = Array.isArray(data.hits) ? data.hits : [];
 
     return hits.some(filter);
@@ -44,7 +66,7 @@ export async function waitForLogpointCount(
 ): Promise<void> {
   await waitFor(async () => {
     const res = await client.callTool("getLogpointHits");
-    const data = JSON.parse(res.content[0].text) as { hits?: Array<{ message?: string; payload?: { message?: string } }> };
+    const data = unwrapToolPayload<{ hits?: Array<{ message?: string; payload?: { message?: string } }> }>(res);
     const hits = Array.isArray(data.hits) ? data.hits : [];
     const count = hits.filter(filter).length;
 
@@ -59,7 +81,7 @@ export async function waitForDebuggerEvent(
 ): Promise<void> {
   await waitFor(async () => {
     const res = await client.callTool("getDebuggerEvents");
-    const data = JSON.parse(res.content[0].text) as { events?: Array<{ type?: string }> };
+    const data = unwrapToolPayload<{ events?: Array<{ type?: string }> }>(res);
     const events = Array.isArray(data.events) ? data.events : [];
 
     return events.some(predicate);
@@ -73,7 +95,7 @@ export async function waitForDebuggerState(
 ): Promise<void> {
   await waitFor(async () => {
     const res = await client.callTool("getDebuggerState");
-    const data = JSON.parse(res.content[0].text);
+    const data = unwrapToolPayload(res);
 
     return predicate(data);
   }, options);

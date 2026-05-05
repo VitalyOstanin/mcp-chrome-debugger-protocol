@@ -127,9 +127,17 @@ export class DebuggerTestHelper {
     columnNumber: number,
     condition?: string,
   ): Promise<BreakpointInfo> {
+    // MCP schema enforces 1-based columns. Older tests pass `0` to mean "any column" — translate
+    // that to omitting the field, keeping the tests working without weakening server validation.
+    const breakpoint: { line: number; column?: number; condition?: string } = { line: lineNumber, condition };
+
+    if (columnNumber >= 1) {
+      breakpoint.column = columnNumber;
+    }
+
     const result = await this.mcpClient.callTool("setBreakpoints", {
       source: { path: filePath },
-      breakpoints: [{ line: lineNumber, column: columnNumber, condition }],
+      breakpoints: [breakpoint],
     });
 
     if (result.isError || !result.content[0]) {
@@ -166,9 +174,15 @@ export class DebuggerTestHelper {
     columnNumber: number,
     logMessage: string,
   ): Promise<BreakpointInfo> {
+    const breakpoint: { line: number; column?: number; logMessage: string } = { line: lineNumber, logMessage };
+
+    if (columnNumber >= 1) {
+      breakpoint.column = columnNumber;
+    }
+
     const result = await this.mcpClient.callTool("setBreakpoints", {
       source: { path: filePath },
-      breakpoints: [{ line: lineNumber, column: columnNumber, logMessage }],
+      breakpoints: [breakpoint],
     });
 
     if (result.isError || !result.content[0]) {
@@ -239,10 +253,10 @@ export class DebuggerTestHelper {
     await this.mcpClient.callTool("stepOut");
   }
 
-  async evaluate(expression: string, callFrameId?: string): Promise<{ value: unknown; type: string; className?: string }> {
+  async evaluate(expression: string, frameId?: number): Promise<{ value: unknown; type: string; className?: string }> {
     const result = await this.mcpClient.callTool("evaluate", {
       expression,
-      callFrameId,
+      frameId,
     });
 
     if (result.isError || !result.content[0]) {
@@ -256,7 +270,7 @@ export class DebuggerTestHelper {
     }
   }
 
-  async getCallStack(): Promise<Array<{ callFrameId: string; functionName?: string; location: { scriptId: string; lineNumber: number; columnNumber?: number } }>> {
+  async getCallStack(): Promise<Array<{ id: number; name: string; line: number; column?: number; source?: { path?: string } }>> {
     const result = await this.mcpClient.callTool("stackTrace");
 
     if (result.isError || !result.content[0]) {
@@ -270,9 +284,9 @@ export class DebuggerTestHelper {
     }
   }
 
-  async getScopeVariables(callFrameId: string): Promise<Array<{ name: string; value: { type: string; value?: unknown }; scope?: { type: string } }>> {
+  async getScopeVariables(variablesReference: number): Promise<Array<{ name: string; value: string; type?: string; variablesReference: number }>> {
     const result = await this.mcpClient.callTool("variables", {
-      variablesReference: callFrameId,
+      variablesReference,
     });
 
     if (result.isError || !result.content[0]) {

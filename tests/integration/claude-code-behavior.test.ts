@@ -110,7 +110,7 @@ describe('Claude Code MCP behavior simulation', () => {
         source: { path: '/test/file.js' },
         breakpoints: [{
           line: 10,
-          column: 0,
+          column: 1,
           logMessage: 'Test message',
         }],
       });

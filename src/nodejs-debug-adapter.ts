@@ -5,9 +5,6 @@ import {
   StoppedEvent,
   OutputEvent,
   Thread,
-  StackFrame,
-  Scope,
-  Variable,
   Breakpoint,
   Event as DAEvent,
 } from '@vscode/debugadapter';
@@ -49,6 +46,10 @@ interface NodeJSRuntimeBreakpoint {
   logMessage?: string;
 }
 
+type VariableHandle =
+  | { kind: 'scope'; frameIndex: number; scopeIndex: number; objectId?: string }
+  | { kind: 'object'; objectId: string };
+
 export class NodeJSDebugAdapter extends DebugSession {
   private static readonly THREAD_ID = 1;
 
@@ -60,6 +61,12 @@ export class NodeJSDebugAdapter extends DebugSession {
   private cdpConnection: CDPConnection | null = null;
   private readonly sourceMapResolver = new SourceMapResolver();
   private readonly scriptsByUrl = new Map<string, string>();
+  private readonly scriptsById = new Map<string, Protocol.Debugger.ScriptParsedEvent>();
+  private currentCallFrames: Protocol.Debugger.CallFrame[] = [];
+  private readonly variableHandles = new Map<number, VariableHandle>();
+  private nextVariableHandleId = 1;
+  private lastException: Protocol.Runtime.ExceptionDetails | null = null;
+  private exceptionPauseState: 'none' | 'uncaught' | 'all' = 'none';
 
   private async getScriptIdForPath(targetPath: string, timeoutMs = 1000): Promise<string | undefined> {
     const deadline = Date.now() + timeoutMs;
@@ -330,6 +337,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       case "Debugger.scriptParsed": {
         const params = event.params as Protocol.Debugger.ScriptParsedEvent;
 
+        this.scriptsById.set(params.scriptId, params);
         if (params.url) {
           this.scriptsByUrl.set(params.url, params.scriptId);
           if (params.url.startsWith("file://")) {
@@ -395,35 +403,53 @@ export class NodeJSDebugAdapter extends DebugSession {
   }
 
   private handleDebuggerPaused(params: Protocol.Debugger.PausedEvent): void {
-    let reason = "pause";
+    // Persist runtime state for evaluate/stackTrace/scopes/variables before raising the event
+    this.currentCallFrames = params.callFrames;
+    this.variableHandles.clear();
+    this.nextVariableHandleId = 1;
+
+    if (params.reason === 'exception' || params.reason === 'promiseRejection') {
+      const data = params.data as Protocol.Runtime.RemoteObject | undefined;
+
+      this.lastException = {
+        exceptionId: 0,
+        text: data?.description ?? 'Exception',
+        lineNumber: this.currentCallFrames[0]?.location.lineNumber ?? 0,
+        columnNumber: this.currentCallFrames[0]?.location.columnNumber ?? 0,
+        scriptId: this.currentCallFrames[0]?.location.scriptId,
+        exception: data,
+      };
+    }
+
+    let reason = 'pause';
 
     // Map CDP pause reasons to DAP stopped reasons
     switch (params.reason) {
-      case "exception":
-      case "promiseRejection":
-        reason = "exception";
+      case 'exception':
+      case 'promiseRejection':
+        reason = 'exception';
         break;
-      case "other":
+      case 'other':
         // Check if it's actually a breakpoint hit
         if (params.hitBreakpoints && params.hitBreakpoints.length > 0) {
-          reason = "breakpoint";
+          reason = 'breakpoint';
         } else {
-          reason = "pause";
+          reason = 'pause';
         }
         break;
-      case "debugCommand":
-        reason = "step";
+      case 'debugCommand':
+        reason = 'step';
         break;
-      case "DOM":
-      case "ambiguous":
-      case "assert":
-      case "CSPViolation":
-      case "EventListener":
-      case "instrumentation":
-      case "OOM":
-      case "XHR":
+      case 'DOM':
+      case 'ambiguous':
+      case 'assert':
+      case 'CSPViolation':
+      case 'EventListener':
+      case 'instrumentation':
+      case 'OOM':
+      case 'XHR':
       default:
-        reason = "pause";
+        reason = 'pause';
         break;
     }
 
@@ -439,9 +465,8 @@ export class NodeJSDebugAdapter extends DebugSession {
   }
 
   private handleException(params: Protocol.Runtime.ExceptionThrownEvent): void {
-    const message = params.exceptionDetails.text;
-
-    this.sendEvent(new OutputEvent(`Exception: ${message}\n`, "stderr"));
+    this.lastException = params.exceptionDetails;
+    this.sendEvent(new OutputEvent(`Exception: ${params.exceptionDetails.text}\n`, "stderr"));
   }
 
   protected async setBreakPointsRequest(
@@ -482,7 +507,7 @@ export class NodeJSDebugAdapter extends DebugSession {
           let targetColumn = column;
 
           if (this.cdpTransport) {
-            if (path.endsWith(".ts") || path.includes("src/")) {
+            if (/\.(ts|tsx|mts|cts)$/.test(path)) {
               try {
                 const sourceMapResolution = await this.sourceMapResolver.resolveSourceMapPosition(path, line, column);
 
@@ -769,7 +794,6 @@ export class NodeJSDebugAdapter extends DebugSession {
       // Use IIFE with try/catch to guard ReferenceErrors and other runtime errors
       return `"${key}":(()=>{try{return ${expr}}catch(_){return undefined}})()`;
     }).join(',');
-
     // Build message template using __vars values instead of re-evaluating expressions
     const tpl = logMessage.replace(/`/g, "\\`").replace(/\{([^}]+)\}/g, (_, expr) => {
       const key = expr.trim().replace(/"/g, '\\"');
@@ -781,94 +805,11 @@ export class NodeJSDebugAdapter extends DebugSession {
     return `(()=>{try{const __vars={${varsEntries}};typeof __mcpLogPoint==='function'&&__mcpLogPoint(JSON.stringify({message:\`${tpl}\`,vars:__vars,time:Date.now()}))}catch(_){};return false})()`;
   }
 
-  protected threadsRequest(response: DebugProtocol.ThreadsResponse): void {
-    // Return a single thread for Node.js main thread
-    response.body = {
-      threads: [new Thread(NodeJSDebugAdapter.THREAD_ID, "Main Thread")],
-    };
-    this.sendResponse(response);
-  }
-
-  protected stackTraceRequest(
-    response: DebugProtocol.StackTraceResponse,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    _args: DebugProtocol.StackTraceArguments,
-  ): void {
-    // Mock stack trace - in real implementation, get from Node.js inspector
-    const frames: StackFrame[] = [
-      new StackFrame(1, "main", undefined, 1, 1),
-      new StackFrame(2, "function1", undefined, 10, 1),
-      new StackFrame(3, "function2", undefined, 20, 1),
-    ];
-
-    response.body = {
-      stackFrames: frames,
-      totalFrames: frames.length,
-    };
-    this.sendResponse(response);
-  }
-
-  protected scopesRequest(
-    response: DebugProtocol.ScopesResponse,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    _args: DebugProtocol.ScopesArguments,
-  ): void {
-    // Mock scopes - in real implementation, get from Node.js inspector
-    const scopes: Scope[] = [new Scope("Local", 1, false), new Scope("Global", 2, true)];
-
-    response.body = {
-      scopes,
-    };
-    this.sendResponse(response);
-  }
-
-  protected variablesRequest(
-    response: DebugProtocol.VariablesResponse,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    _args: DebugProtocol.VariablesArguments,
-  ): void {
-    // Mock variables - in real implementation, get from Node.js inspector
-    const variables: Variable[] = [
-      new Variable("user", '{ name: "John", age: 30 }', 3),
-      new Variable("items", '["item1", "item2", "item3"]', 4),
-      new Variable("count", "42", 0),
-    ];
-
-    response.body = {
-      variables,
-    };
-    this.sendResponse(response);
-  }
-
-  protected evaluateRequest(response: DebugProtocol.EvaluateResponse, args: DebugProtocol.EvaluateArguments): void {
-    // Mock evaluation - in real implementation, evaluate in Node.js context
-    let result = "undefined";
-    const variablesReference = 0;
-
-    // Simple mock evaluation
-    switch (args.expression) {
-      case "user.name":
-        result = '"John"';
-        break;
-      case "user.age":
-        result = "30";
-        break;
-      case "items.length":
-        result = "3";
-        break;
-      case "new Date().toISOString()":
-        result = `"${new Date().toISOString()}"`;
-        break;
-      default:
-        result = `"Expression: ${args.expression}"`;
-    }
-
-    response.body = {
-      result,
-      variablesReference,
-    };
-    this.sendResponse(response);
-  }
+  // The DAP request handlers below (continueRequest/pauseRequest/...) remain as DebugSession
+  // overrides for the small subset reachable through DAP message routing. The MCP-facing path goes
+  // through the public methods declared further down (continue, pause, stepIn, stepOut, next,
+  // evaluate, stackTrace, scopes, variables, threads, ...) so we never depend on the DebugSession
+  // protected handler chain for those operations.
 
   protected async continueRequest(
     response: DebugProtocol.ContinueResponse,
@@ -988,8 +929,550 @@ export class NodeJSDebugAdapter extends DebugSession {
     }
 
     this.isAttached = false;
+    this.currentCallFrames = [];
+    this.variableHandles.clear();
 
     super.disconnectRequest(response, args);
+  }
+
+  // ===== Public methods used by DAPClient.dapRequest =====
+  // These talk to CDP directly and bypass DebugSession's protected request pipeline.
+
+  private requireTransport(): CDPTransport {
+    if (!this.cdpTransport) {
+      throw new Error('Not attached to a debugger');
+    }
+
+    return this.cdpTransport;
+  }
+
+  private allocateHandle(handle: VariableHandle): number {
+    const id = this.nextVariableHandleId++;
+
+    this.variableHandles.set(id, handle);
+
+    return id;
+  }
+
+  private remoteObjectToString(remote: Protocol.Runtime.RemoteObject): string {
+    if (remote.unserializableValue !== undefined) {
+      return remote.unserializableValue;
+    }
+    if (remote.value !== undefined) {
+      return typeof remote.value === 'string' ? remote.value : JSON.stringify(remote.value);
+    }
+
+    return remote.description ?? remote.type;
+  }
+
+  public async continueExecution(args?: DebugProtocol.ContinueArguments): Promise<DebugProtocol.ContinueResponse> {
+    void args;
+    await this.requireTransport().sendCommand('Debugger.resume');
+
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'continue',
+      success: true,
+      body: { allThreadsContinued: true },
+    };
+  }
+
+  public async pauseExecution(args?: DebugProtocol.PauseArguments): Promise<DebugProtocol.PauseResponse> {
+    void args;
+    await this.requireTransport().sendCommand('Debugger.pause');
+
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'pause',
+      success: true,
+    };
+  }
+
+  public async stepIn(args?: DebugProtocol.StepInArguments): Promise<DebugProtocol.StepInResponse> {
+    void args;
+    await this.requireTransport().sendCommand('Debugger.stepInto');
+
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'stepIn',
+      success: true,
+    };
+  }
+
+  public async stepOut(args?: DebugProtocol.StepOutArguments): Promise<DebugProtocol.StepOutResponse> {
+    void args;
+    await this.requireTransport().sendCommand('Debugger.stepOut');
+
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'stepOut',
+      success: true,
+    };
+  }
+
+  public async next(args?: DebugProtocol.NextArguments): Promise<DebugProtocol.NextResponse> {
+    void args;
+    await this.requireTransport().sendCommand('Debugger.stepOver');
+
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'next',
+      success: true,
+    };
+  }
+
+  public threads(): DebugProtocol.ThreadsResponse {
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'threads',
+      success: true,
+      body: { threads: [new Thread(NodeJSDebugAdapter.THREAD_ID, 'Main Thread')] },
+    };
+  }
+
+  public stackTrace(args: DebugProtocol.StackTraceArguments): DebugProtocol.StackTraceResponse {
+    const startFrame = args.startFrame ?? 0;
+    const levels = args.levels && args.levels > 0 ? args.levels : this.currentCallFrames.length;
+    const slice = this.currentCallFrames.slice(startFrame, startFrame + levels);
+    const stackFrames: DebugProtocol.StackFrame[] = slice.map((frame, idx) => {
+      const absoluteIndex = startFrame + idx;
+      const script = this.scriptsById.get(frame.location.scriptId);
+      const url = script?.url ?? '';
+      const sourcePath = url.startsWith('file://') ? url.replace(/^file:\/\//, '') : url;
+
+      return {
+        id: absoluteIndex,
+        name: frame.functionName || '<anonymous>',
+        line: frame.location.lineNumber + 1,
+        column: (frame.location.columnNumber ?? 0) + 1,
+        source: sourcePath
+          ? { name: sourcePath.split('/').pop() ?? sourcePath, path: sourcePath }
+          : undefined,
+      };
+    });
+
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'stackTrace',
+      success: true,
+      body: { stackFrames, totalFrames: this.currentCallFrames.length },
+    };
+  }
+
+  public scopes(args: DebugProtocol.ScopesArguments): DebugProtocol.ScopesResponse {
+    if (args.frameId < 0 || args.frameId >= this.currentCallFrames.length) {
+      throw new Error(`Frame ${args.frameId} not found`);
+    }
+
+    const frame = this.currentCallFrames[args.frameId];
+    const dapScopes: DebugProtocol.Scope[] = frame.scopeChain.map((scope, scopeIndex) => {
+      const reference = this.allocateHandle({
+        kind: 'scope',
+        frameIndex: args.frameId,
+        scopeIndex,
+        objectId: scope.object.objectId,
+      });
+      const presentationHint =
+        scope.type === 'local' ? 'locals'
+        : scope.type === 'global' ? undefined
+        : undefined;
+      const expensive = scope.type === 'global';
+
+      return {
+        name: scope.name ?? scope.type,
+        presentationHint,
+        variablesReference: reference,
+        expensive,
+      };
+    });
+
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'scopes',
+      success: true,
+      body: { scopes: dapScopes },
+    };
+  }
+
+  public async variables(args: DebugProtocol.VariablesArguments): Promise<DebugProtocol.VariablesResponse> {
+    const handle = this.variableHandles.get(args.variablesReference);
+
+    if (!handle) {
+      throw new Error(`Variable reference ${args.variablesReference} not found`);
+    }
+
+    const {objectId} = handle;
+
+    if (objectId === undefined) {
+      return {
+        seq: 0,
+        type: 'response',
+        request_seq: 0,
+        command: 'variables',
+        success: true,
+        body: { variables: [] },
+      };
+    }
+
+    const result = await this.requireTransport().sendCommand<Protocol.Runtime.GetPropertiesResponse>(
+      'Runtime.getProperties',
+      {
+        objectId,
+        ownProperties: handle.kind === 'object',
+        accessorPropertiesOnly: false,
+        generatePreview: true,
+      },
+    );
+    const variables: DebugProtocol.Variable[] = result.result
+      .filter(prop => !(prop.value === undefined && prop.get === undefined))
+      .map(prop => {
+        const remote = prop.value;
+        const childRef = remote?.objectId
+          ? this.allocateHandle({ kind: 'object', objectId: remote.objectId })
+          : 0;
+
+        return {
+          name: prop.name,
+          value: remote ? this.remoteObjectToString(remote) : '<accessor>',
+          type: remote?.type,
+          variablesReference: childRef,
+        };
+      });
+
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'variables',
+      success: true,
+      body: { variables },
+    };
+  }
+
+  public async evaluate(args: DebugProtocol.EvaluateArguments): Promise<DebugProtocol.EvaluateResponse> {
+    const transport = this.requireTransport();
+    let remote: Protocol.Runtime.RemoteObject;
+    let exceptionDetails: Protocol.Runtime.ExceptionDetails | undefined;
+
+    if (args.frameId !== undefined && this.currentCallFrames[args.frameId]) {
+      const callFrame = this.currentCallFrames[args.frameId];
+      const response = await transport.sendCommand<Protocol.Debugger.EvaluateOnCallFrameResponse>(
+        'Debugger.evaluateOnCallFrame',
+        {
+          callFrameId: callFrame.callFrameId,
+          expression: args.expression,
+          objectGroup: 'mcp-evaluate',
+          includeCommandLineAPI: true,
+          silent: false,
+          returnByValue: false,
+          generatePreview: true,
+        },
+      );
+
+      remote = response.result;
+      exceptionDetails = response.exceptionDetails;
+    } else {
+      const response = await transport.sendCommand<Protocol.Runtime.EvaluateResponse>(
+        'Runtime.evaluate',
+        {
+          expression: args.expression,
+          objectGroup: 'mcp-evaluate',
+          includeCommandLineAPI: true,
+          silent: false,
+          returnByValue: false,
+          generatePreview: true,
+          replMode: args.context === 'repl',
+        },
+      );
+
+      remote = response.result;
+      exceptionDetails = response.exceptionDetails;
+    }
+
+    if (exceptionDetails) {
+      throw new Error(exceptionDetails.exception?.description ?? exceptionDetails.text);
+    }
+
+    const reference = remote.objectId
+      ? this.allocateHandle({ kind: 'object', objectId: remote.objectId })
+      : 0;
+
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'evaluate',
+      success: true,
+      body: {
+        result: this.remoteObjectToString(remote),
+        type: remote.type,
+        variablesReference: reference,
+      },
+    };
+  }
+
+  public async setVariable(
+    args: DebugProtocol.SetVariableArguments,
+  ): Promise<DebugProtocol.SetVariableResponse> {
+    const handle = this.variableHandles.get(args.variablesReference);
+
+    if (handle?.kind !== 'scope') {
+      throw new Error('setVariable is only supported on scope references');
+    }
+
+    if (handle.frameIndex < 0 || handle.frameIndex >= this.currentCallFrames.length) {
+      throw new Error(`Frame ${handle.frameIndex} not found`);
+    }
+
+    const callFrame = this.currentCallFrames[handle.frameIndex];
+    const transport = this.requireTransport();
+    // Evaluate the desired value as an expression, then assign via Debugger.setVariableValue
+    const evalResult = await transport.sendCommand<Protocol.Debugger.EvaluateOnCallFrameResponse>(
+      'Debugger.evaluateOnCallFrame',
+      {
+        callFrameId: callFrame.callFrameId,
+        expression: args.value,
+        objectGroup: 'mcp-set-variable',
+        includeCommandLineAPI: false,
+        silent: true,
+        returnByValue: false,
+        generatePreview: true,
+      },
+    );
+
+    if (evalResult.exceptionDetails) {
+      throw new Error(evalResult.exceptionDetails.exception?.description ?? evalResult.exceptionDetails.text);
+    }
+
+    const newValue: Protocol.Runtime.CallArgument = evalResult.result.objectId
+      ? { objectId: evalResult.result.objectId }
+      : { value: evalResult.result.value };
+
+    await transport.sendCommand('Debugger.setVariableValue', {
+      scopeNumber: handle.scopeIndex,
+      variableName: args.name,
+      newValue,
+      callFrameId: callFrame.callFrameId,
+    });
+
+    const childRef = evalResult.result.objectId
+      ? this.allocateHandle({ kind: 'object', objectId: evalResult.result.objectId })
+      : 0;
+
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'setVariable',
+      success: true,
+      body: {
+        value: this.remoteObjectToString(evalResult.result),
+        type: evalResult.result.type,
+        variablesReference: childRef,
+      },
+    };
+  }
+
+  public loadedSources(): DebugProtocol.LoadedSourcesResponse {
+    const sources: DebugProtocol.Source[] = [];
+    const seen = new Set<string>();
+
+    for (const script of this.scriptsById.values()) {
+      const {url} = script;
+
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+
+      const path = url.startsWith('file://') ? url.replace(/^file:\/\//, '') : url;
+
+      sources.push({
+        name: path.split('/').pop() ?? path,
+        path,
+      });
+    }
+
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'loadedSources',
+      success: true,
+      body: { sources },
+    };
+  }
+
+  public exceptionInfo(args: DebugProtocol.ExceptionInfoArguments): DebugProtocol.ExceptionInfoResponse {
+    void args;
+
+    const ex = this.lastException;
+
+    if (!ex) {
+      throw new Error('No exception information available');
+    }
+
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'exceptionInfo',
+      success: true,
+      body: {
+        exceptionId: String(ex.exceptionId),
+        description: ex.exception?.description ?? ex.text,
+        breakMode: this.exceptionPauseState === 'all' ? 'always' : 'unhandled',
+      },
+    };
+  }
+
+  public async setExceptionBreakpoints(
+    args: DebugProtocol.SetExceptionBreakpointsArguments,
+  ): Promise<DebugProtocol.SetExceptionBreakpointsResponse> {
+    let state: 'none' | 'uncaught' | 'all' = 'none';
+    const {filters} = args;
+
+    if (filters.includes('all') || (filters.includes('caught') && filters.includes('uncaught'))) {
+      state = 'all';
+    } else if (filters.includes('uncaught')) {
+      state = 'uncaught';
+    }
+
+    await this.requireTransport().sendCommand('Debugger.setPauseOnExceptions', { state });
+    this.exceptionPauseState = state;
+
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'setExceptionBreakpoints',
+      success: true,
+      body: { breakpoints: filters.map(() => ({ verified: true })) },
+    };
+  }
+
+  public async breakpointLocations(
+    args: DebugProtocol.BreakpointLocationsArguments,
+  ): Promise<DebugProtocol.BreakpointLocationsResponse> {
+    const path = args.source.path ?? '';
+    const scriptId = await this.getScriptIdForPath(path, 200);
+
+    if (!scriptId) {
+      return {
+        seq: 0,
+        type: 'response',
+        request_seq: 0,
+        command: 'breakpointLocations',
+        success: true,
+        body: { breakpoints: [] },
+      };
+    }
+
+    const transport = this.requireTransport();
+    const start: Protocol.Debugger.Location = {
+      scriptId,
+      lineNumber: Math.max(0, args.line - 1),
+      columnNumber: args.column !== undefined ? Math.max(0, args.column - 1) : 0,
+    };
+    const end: Protocol.Debugger.Location = {
+      scriptId,
+      lineNumber: Math.max(start.lineNumber, args.endLine !== undefined ? args.endLine - 1 : start.lineNumber),
+      columnNumber: args.endColumn !== undefined ? Math.max(0, args.endColumn - 1) : 200,
+    };
+    const possible = await transport.sendCommand<Protocol.Debugger.GetPossibleBreakpointsResponse>(
+      'Debugger.getPossibleBreakpoints',
+      { start, end, restrictToFunction: false },
+    );
+    const breakpoints: DebugProtocol.BreakpointLocation[] = possible.locations.map(loc => ({
+      line: loc.lineNumber + 1,
+      column: (loc.columnNumber ?? 0) + 1,
+    }));
+
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'breakpointLocations',
+      success: true,
+      body: { breakpoints },
+    };
+  }
+
+  public async restartFrame(
+    args: DebugProtocol.RestartFrameArguments,
+  ): Promise<DebugProtocol.RestartFrameResponse> {
+    if (args.frameId < 0 || args.frameId >= this.currentCallFrames.length) {
+      throw new Error(`Frame ${args.frameId} not found`);
+    }
+
+    const frame = this.currentCallFrames[args.frameId];
+
+    await this.requireTransport().sendCommand('Debugger.restartFrame', { callFrameId: frame.callFrameId });
+
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'restartFrame',
+      success: true,
+    };
+  }
+
+  public goto(args: DebugProtocol.GotoArguments): DebugProtocol.GotoResponse {
+    void args;
+    throw new Error('goto is not supported by the Node.js inspector');
+  }
+
+  public async terminate(): Promise<DebugProtocol.TerminateResponse> {
+    if (this.nodeProcess) {
+      this.nodeProcess.kill();
+      this.nodeProcess = null;
+    }
+
+    if (this.cdpTransport) {
+      await this.cdpTransport.disconnect();
+      this.cdpTransport = null;
+      this.cdpConnection = null;
+    }
+
+    this.isAttached = false;
+
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'terminate',
+      success: true,
+    };
+  }
+
+  public async restart(): Promise<DebugProtocol.RestartResponse> {
+    // Best-effort: detach and re-attach is the responsibility of the caller; we just clean state.
+    this.currentCallFrames = [];
+    this.variableHandles.clear();
+    this.lastException = null;
+
+    return {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command: 'restart',
+      success: true,
+    };
   }
 
   // Method to simulate logpoint hit - would be called from DAP runtime events

@@ -299,6 +299,70 @@ describe('resolveGeneratedPosition', () => {
     });
   });
 
+  describe('nested ../ path normalization (BUGFIX-source-map-path-normalization)', () => {
+    // Reproduces the case from BUGFIX-source-map-path-normalization.md: source maps generated
+    // by build setups whose `sources` entries carry multiple leading `../` segments. The
+    // resolver must strip ALL leading `../` to match user-provided source paths.
+    const cases: Array<{ name: string; sources: string[]; expectedMatch: string; query: string }> = [
+      {
+        name: 'two leading ../',
+        sources: ['../../src/utils/helper.controller.ts'],
+        expectedMatch: '../../src/utils/helper.controller.ts',
+        query: 'src/utils/helper.controller.ts',
+      },
+      {
+        name: 'three leading ../',
+        sources: ['../../../src/services/api.service.ts'],
+        expectedMatch: '../../../src/services/api.service.ts',
+        query: 'src/services/api.service.ts',
+      },
+      {
+        name: 'four leading ../',
+        sources: ['../../../../packages/core/src/index.ts'],
+        expectedMatch: '../../../../packages/core/src/index.ts',
+        query: 'packages/core/src/index.ts',
+      },
+      {
+        name: 'mixed: leading ../ then internal /../',
+        sources: ['../../packages/foo/../bar/index.ts'],
+        expectedMatch: '../../packages/foo/../bar/index.ts',
+        query: 'packages/foo/../bar/index.ts',
+      },
+    ];
+
+    test.each(cases)('matches source with $name', async ({ sources, expectedMatch, query }) => {
+      const testSourceMap = {
+        version: 3,
+        sources,
+        sourcesContent: ['export const x = 1;'],
+        names: [],
+        mappings: 'AAAA,OAAO,CAAC,GAAG,CAAC,0BAA0B,CAAC,CAAC',
+      };
+      const sourceMapPath = join(process.cwd(), `test-nested-paths-${sources.length}-${Date.now()}.js.map`);
+
+      writeFileSync(sourceMapPath, JSON.stringify(testSourceMap));
+
+      try {
+        const result = await client.callTool('resolveGeneratedPosition', {
+          originalSource: query,
+          originalLine: 1,
+          originalColumn: 1,
+          sourceMapPaths: [sourceMapPath],
+        });
+        const response = JSON.parse(result.content[0].text);
+
+        expect(response.success).toBe(true);
+        expect(response.matchedSource).toBe(expectedMatch);
+      } finally {
+        try {
+          (await import('node:fs')).unlinkSync(sourceMapPath);
+        } catch {
+          // ignore cleanup errors
+        }
+      }
+    });
+  });
+
   describe('automatic source map discovery', () => {
     it('should automatically find source maps in build directory', async () => {
       // This test checks if the tool can find source maps without explicit paths
@@ -354,68 +418,45 @@ describe('resolveGeneratedPosition', () => {
   });
 
   describe('coordinate validation', () => {
+    // Schema enforcement happens at the MCP server boundary (Zod, min(1) on lineNumberSchema /
+    // columnNumberSchema). Invalid coordinates therefore surface as protocol-level rejections —
+    // the SDK throws an McpError on the client. The runtime guards inside SourceMapResolver still
+    // exist as a defence-in-depth check but are no longer reachable through MCP.
+    async function expectInvalidArgsRejection(
+      tool: 'resolveOriginalPosition' | 'resolveGeneratedPosition',
+      args: Record<string, unknown>,
+    ): Promise<void> {
+      await expect(client.callTool(tool, args)).rejects.toThrow(/Invalid arguments|greater than or equal to 1/i);
+    }
+
     it('should reject 0-based line numbers', async () => {
-      const result = await client.callTool('resolveOriginalPosition', {
+      await expectInvalidArgsRejection('resolveOriginalPosition', {
         generatedLine: 0,
         generatedColumn: 1,
       });
-
-      expect(result.content).toBeDefined();
-      expect(result.content.length).toBe(1);
-
-      const response = JSON.parse(result.content[0].text);
-
-      expect(response.success).toBe(false);
-      expect(response.error).toBe('Invalid line number: lines must be 1-based (start at 1)');
-      expect(response.coordinateSystem).toBe('MCP/DAP: 1-based lines, 1-based columns');
     });
 
     it('should reject 0-based column numbers', async () => {
-      const result = await client.callTool('resolveOriginalPosition', {
+      await expectInvalidArgsRejection('resolveOriginalPosition', {
         generatedLine: 1,
         generatedColumn: 0,
       });
-
-      expect(result.content).toBeDefined();
-      expect(result.content.length).toBe(1);
-
-      const response = JSON.parse(result.content[0].text);
-
-      expect(response.success).toBe(false);
-      expect(response.error).toBe('Invalid column number: columns must be 1-based (start at 1)');
-      expect(response.coordinateSystem).toBe('MCP/DAP: 1-based lines, 1-based columns');
     });
 
     it('should reject negative line numbers in resolveGeneratedPosition', async () => {
-      const result = await client.callTool('resolveGeneratedPosition', {
+      await expectInvalidArgsRejection('resolveGeneratedPosition', {
         originalSource: 'test.ts',
         originalLine: -1,
         originalColumn: 1,
       });
-
-      expect(result.content).toBeDefined();
-      expect(result.content.length).toBe(1);
-
-      const response = JSON.parse(result.content[0].text);
-
-      expect(response.success).toBe(false);
-      expect(response.error).toBe('Invalid line number: lines must be 1-based (start at 1)');
     });
 
     it('should reject negative column numbers in resolveGeneratedPosition', async () => {
-      const result = await client.callTool('resolveGeneratedPosition', {
+      await expectInvalidArgsRejection('resolveGeneratedPosition', {
         originalSource: 'test.ts',
         originalLine: 1,
         originalColumn: -1,
       });
-
-      expect(result.content).toBeDefined();
-      expect(result.content.length).toBe(1);
-
-      const response = JSON.parse(result.content[0].text);
-
-      expect(response.success).toBe(false);
-      expect(response.error).toBe('Invalid column number: columns must be 1-based (start at 1)');
     });
 
     it('should accept valid 1-based coordinates', async () => {

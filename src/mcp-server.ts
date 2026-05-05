@@ -1,10 +1,40 @@
 import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 import { DAPClient } from "./dap-client.js";
 import { DAPDebuggerManager } from "./dap-debugger-manager.js";
 import { ToolStateManager } from "./tool-state-manager.js";
+
+// Shared Zod schemas. MCP/DAP coordinate system is 1-based for both lines and columns.
+const lineNumberSchema = z.number().int().min(1).describe("Line number (1-based)");
+const columnNumberSchema = z.number().int().min(1).describe("Column number (1-based)");
+const portSchema = z.number().int().min(1).max(65535);
+const idSchema = z.number().int().min(1);
+
+interface PackageManifest {
+  name: string;
+  version: string;
+}
+
+const packageManifest: PackageManifest = (() => {
+  // Resolve from dist/index.js or dist/mcp-server.js up to the project root.
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [join(here, '..', 'package.json'), join(here, '..', '..', 'package.json')];
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(readFileSync(candidate, 'utf-8')) as PackageManifest;
+    } catch {
+      // try next candidate
+    }
+  }
+
+  return { name: '@vitalyostanin/mcp-chrome-debugger-protocol', version: '0.0.0' };
+})();
 
 type ToolCategory = 'connection' | 'disconnection' | 'debugging' | 'inspection' | 'data';
 
@@ -66,8 +96,8 @@ export class NodeDebuggerMCPServer {
   constructor() {
     this.server = new McpServer(
       {
-        name: "@vitalyostanin/mcp-chrome-debugger-protocol",
-        version: "1.0.0",
+        name: packageManifest.name,
+        version: packageManifest.version,
       },
       {
         capabilities: {
@@ -192,12 +222,12 @@ export class NodeDebuggerMCPServer {
         description: "Attach to Node.js debugger process using DAP",
         inputSchema: {
           url: z.string().optional().describe("WebSocket URL of the debugger (e.g., ws://127.0.0.1:9229/...)"),
-          port: z.number().optional().default(9229).describe("Debug port (default: 9229)"),
+          port: portSchema.optional().default(9229).describe("Debug port (default: 9229)"),
           address: z.string().optional().default("localhost").describe("Debug address (default: localhost)"),
-          processId: z.number().optional().describe("Process ID to attach to"),
-          discoverTimeoutMs: z.number().optional().default(8000).describe("Max time to discover inspector port (ms)"),
-          probeTimeoutMs: z.number().optional().default(400).describe("Timeout for /json/version probe (ms)"),
-          ports: z.array(z.number()).optional().describe("Explicit list of ports to probe when enabling by PID (defaults 9229..9250)"),
+          processId: z.number().int().min(1).optional().describe("Process ID to attach to"),
+          discoverTimeoutMs: z.number().int().min(0).optional().default(8000).describe("Max time to discover inspector port (ms)"),
+          probeTimeoutMs: z.number().int().min(0).optional().default(400).describe("Timeout for /json/version probe (ms)"),
+          ports: z.array(portSchema).optional().describe("Explicit list of ports to probe when enabling by PID (defaults 9229..9250)"),
         },
       },
       async ({ url, port = 9229, address = "localhost", processId, discoverTimeoutMs = 8000, probeTimeoutMs = 400, ports }) => {
@@ -277,12 +307,12 @@ export class NodeDebuggerMCPServer {
             path: z.string().describe("Absolute file path to source code file"),
           }).describe("Source file information"),
           breakpoints: z.array(z.object({
-            line: z.number().describe("Line number in source file (1-based)"),
-            column: z.number().optional().describe("Column number in source file (1-based, optional)"),
+            line: lineNumberSchema,
+            column: columnNumberSchema.optional(),
             condition: z.string().optional().describe("Conditional expression for breakpoint (optional). Evaluated at the breakpoint line; place the breakpoint at the next executable statement after variables referenced here are assigned/updated to avoid undefined values."),
             logMessage: z.string().optional().describe("Log message for logpoint (optional). Supports {expr} placeholders evaluated at the logpoint line. Place the logpoint at the next executable statement after variables used in {expr} are assigned; placing it earlier may yield undefined."),
           })).optional().describe("Array of breakpoints to set"),
-          lines: z.array(z.number()).optional().describe("Simple array of line numbers (alternative to breakpoints array)"),
+          lines: z.array(lineNumberSchema).optional().describe("Simple array of line numbers (alternative to breakpoints array)"),
         },
       },
       async ({ source, breakpoints, lines }) => {
@@ -329,10 +359,16 @@ export class NodeDebuggerMCPServer {
         title: "Remove Breakpoint",
         description: "Remove a breakpoint",
         inputSchema: {
-          breakpointId: z.number().describe("Breakpoint ID to remove"),
+          breakpointId: idSchema.describe("Breakpoint ID to remove"),
         },
       },
       async ({ breakpointId }) => {
+        const availability = this.validateToolAvailability("removeBreakpoint");
+
+        if (!availability.isEnabled) {
+          return this.createToolUnavailableError("removeBreakpoint", availability.reason!);
+        }
+
         const result = await this.debuggerManager.removeBreakpoint(breakpointId);
 
         // Send notification about breakpoint removal
@@ -378,7 +414,7 @@ export class NodeDebuggerMCPServer {
         title: "Continue Execution",
         description: "Continue execution (DAP standard name for resume)",
         inputSchema: {
-          threadId: z.number().optional().describe("Thread ID to continue (optional)"),
+          threadId: idSchema.optional().describe("Thread ID to continue (optional)"),
         },
       },
       async ({ threadId }) => {
@@ -426,7 +462,7 @@ export class NodeDebuggerMCPServer {
         title: "Step Over (Next)",
         description: "Step over to next line (DAP standard name for step over)",
         inputSchema: {
-          threadId: z.number().optional().describe("Thread ID to step (optional)"),
+          threadId: idSchema.optional().describe("Thread ID to step (optional)"),
         },
       },
       async ({ threadId }) => {
@@ -451,7 +487,7 @@ export class NodeDebuggerMCPServer {
         title: "Step Into",
         description: "Step into function call (DAP standard name)",
         inputSchema: {
-          threadId: z.number().optional().describe("Thread ID to step (optional)"),
+          threadId: idSchema.optional().describe("Thread ID to step (optional)"),
         },
       },
       async ({ threadId }) => {
@@ -476,17 +512,17 @@ export class NodeDebuggerMCPServer {
         title: "Step Out",
         description: "Step out of current function (DAP standard name)",
         inputSchema: {
-          threadId: z.number().optional().describe("Thread ID to step (optional)"),
+          threadId: idSchema.optional().describe("Thread ID to step (optional)"),
         },
       },
-      async () => {
+      async ({ threadId }) => {
         const availability = this.validateToolAvailability("stepOut");
 
         if (!availability.isEnabled) {
           return this.createToolUnavailableError("stepOut", availability.reason!);
         }
 
-        const stepOutResult = await this.debuggerManager.stepOut();
+        const stepOutResult = await this.debuggerManager.stepOut(threadId);
         const processedResult = this.fixContentTypes(stepOutResult);
 
         return processedResult;
@@ -503,12 +539,12 @@ export class NodeDebuggerMCPServer {
         description: "Evaluate JavaScript expression in debug context (DAP standard name)",
         inputSchema: {
           expression: z.string().describe("JavaScript expression to evaluate"),
-          frameId: z.number().optional().describe("Stack frame ID for context (optional)"),
+          frameId: z.number().int().min(0).optional().describe("Stack frame ID for context (optional)"),
           context: z.enum(['watch', 'repl', 'hover']).optional().describe("Context for the evaluation (optional)"),
-          maxLength: z.number().optional().describe("Maximum response length in characters (default: 20000)"),
-          maxDepth: z.number().optional().describe("Maximum object depth (default: 10)"),
-          maxArrayItems: z.number().optional().describe("Maximum array items to show (default: 50)"),
-          maxObjectKeys: z.number().optional().describe("Maximum object keys to show (default: 50)"),
+          maxLength: z.number().int().min(1).optional().describe("Maximum response length in characters (default: 20000)"),
+          maxDepth: z.number().int().min(0).optional().describe("Maximum object depth (default: 10)"),
+          maxArrayItems: z.number().int().min(0).optional().describe("Maximum array items to show (default: 50)"),
+          maxObjectKeys: z.number().int().min(0).optional().describe("Maximum object keys to show (default: 50)"),
           summary: z.boolean().optional().describe("Return summary mode (types only, default: false)"),
         },
       },
@@ -520,7 +556,7 @@ export class NodeDebuggerMCPServer {
         }
 
         const options = { maxLength, maxDepth, maxArrayItems, maxObjectKeys, summary };
-        const evaluationResult = await this.debuggerManager.evaluate(expression, frameId?.toString(), options);
+        const evaluationResult = await this.debuggerManager.evaluate(expression, frameId, options);
         const processedResult = this.fixContentTypes(evaluationResult);
 
         return processedResult;
@@ -535,13 +571,13 @@ export class NodeDebuggerMCPServer {
         title: "Stack Trace",
         description: "Get current call stack (DAP standard name)",
         inputSchema: {
-          threadId: z.number().optional().describe("Thread ID to get stack for (optional)"),
-          startFrame: z.number().optional().describe("Start frame index (default: 0)"),
-          levels: z.number().optional().describe("Number of frames to return (default: all)"),
-          maxLength: z.number().optional().describe("Maximum response length in characters (default: 20000)"),
-          maxDepth: z.number().optional().describe("Maximum object depth (default: 10)"),
-          maxArrayItems: z.number().optional().describe("Maximum array items to show (default: 50)"),
-          maxObjectKeys: z.number().optional().describe("Maximum object keys to show (default: 50)"),
+          threadId: idSchema.optional().describe("Thread ID to get stack for (optional)"),
+          startFrame: z.number().int().min(0).optional().describe("Start frame index (default: 0)"),
+          levels: z.number().int().min(0).optional().describe("Number of frames to return (default: all)"),
+          maxLength: z.number().int().min(1).optional().describe("Maximum response length in characters (default: 20000)"),
+          maxDepth: z.number().int().min(0).optional().describe("Maximum object depth (default: 10)"),
+          maxArrayItems: z.number().int().min(0).optional().describe("Maximum array items to show (default: 50)"),
+          maxObjectKeys: z.number().int().min(0).optional().describe("Maximum object keys to show (default: 50)"),
           summary: z.boolean().optional().describe("Return summary mode (types only, default: false)"),
         },
       },
@@ -568,14 +604,14 @@ export class NodeDebuggerMCPServer {
         title: "Variables",
         description: "Get variables in scope (DAP standard name)",
         inputSchema: {
-          variablesReference: z.number().describe("Variable reference to get children for"),
+          variablesReference: z.number().int().min(1).describe("Variable reference to get children for"),
           filter: z.enum(['indexed', 'named']).optional().describe("Filter for variable types (optional)"),
-          start: z.number().optional().describe("Start index for indexed variables (optional)"),
-          count: z.number().optional().describe("Number of variables to return (optional)"),
-          maxLength: z.number().optional().describe("Maximum response length in characters (default: 20000)"),
-          maxDepth: z.number().optional().describe("Maximum object depth (default: 10)"),
-          maxArrayItems: z.number().optional().describe("Maximum array items to show (default: 50)"),
-          maxObjectKeys: z.number().optional().describe("Maximum object keys to show (default: 50)"),
+          start: z.number().int().min(0).optional().describe("Start index for indexed variables (optional)"),
+          count: z.number().int().min(0).optional().describe("Number of variables to return (optional)"),
+          maxLength: z.number().int().min(1).optional().describe("Maximum response length in characters (default: 20000)"),
+          maxDepth: z.number().int().min(0).optional().describe("Maximum object depth (default: 10)"),
+          maxArrayItems: z.number().int().min(0).optional().describe("Maximum array items to show (default: 50)"),
+          maxObjectKeys: z.number().int().min(0).optional().describe("Maximum object keys to show (default: 50)"),
           summary: z.boolean().optional().describe("Return summary mode (types only, default: false)"),
         },
       },
@@ -707,8 +743,8 @@ export class NodeDebuggerMCPServer {
         title: "Resolve Original Position",
         description: "Map from compiled JavaScript location to original TypeScript source location using source maps",
         inputSchema: {
-          generatedLine: z.number().describe("Line number in compiled JavaScript file (1-based)"),
-          generatedColumn: z.number().describe("Column number in compiled JavaScript file (1-based)"),
+          generatedLine: lineNumberSchema.describe("Line number in compiled JavaScript file (1-based)"),
+          generatedColumn: columnNumberSchema.describe("Column number in compiled JavaScript file (1-based)"),
           sourceMapPaths: z.array(z.string()).optional().describe("Optional array of .map file paths (defaults to build directory search)"),
         },
       },
@@ -729,8 +765,8 @@ export class NodeDebuggerMCPServer {
         description: "Map from original TypeScript source location to compiled JavaScript location using source maps",
         inputSchema: {
           originalSource: z.string().describe("Original TypeScript source file name (as it appears in source map)"),
-          originalLine: z.number().describe("Line number in original TypeScript source file (1-based)"),
-          originalColumn: z.number().describe("Column number in original TypeScript source file (1-based)"),
+          originalLine: lineNumberSchema.describe("Line number in original TypeScript source file (1-based)"),
+          originalColumn: columnNumberSchema.describe("Column number in original TypeScript source file (1-based)"),
           sourceMapPaths: z.array(z.string()).optional().describe("Optional array of .map file paths (defaults to build directory search)"),
           originalSourcePath: z.string().optional().describe("Absolute path to the TS source; enables auto-discovery of source maps in project build dirs"),
         },
@@ -810,7 +846,7 @@ export class NodeDebuggerMCPServer {
         title: "Get Scopes",
         description: "Get variable scopes for a stack frame (DAP standard)",
         inputSchema: {
-          frameId: z.number().describe("Stack frame ID to get scopes for"),
+          frameId: z.number().int().min(0).describe("Stack frame ID to get scopes for"),
         },
       },
       async ({ frameId }) => {
@@ -835,7 +871,7 @@ export class NodeDebuggerMCPServer {
         title: "Set Variable",
         description: "Set the value of a variable (DAP standard)",
         inputSchema: {
-          variablesReference: z.number().describe("Variable reference containing the variable"),
+          variablesReference: z.number().int().min(1).describe("Variable reference containing the variable"),
           name: z.string().describe("Name of the variable to set"),
           value: z.string().describe("New value for the variable"),
         },
@@ -931,7 +967,7 @@ export class NodeDebuggerMCPServer {
         title: "Get Exception Information",
         description: "Get detailed information about an exception (DAP standard)",
         inputSchema: {
-          threadId: z.number().describe("Thread ID where the exception occurred"),
+          threadId: idSchema.describe("Thread ID where the exception occurred"),
         },
       },
       async ({ threadId }) => {
@@ -988,10 +1024,10 @@ export class NodeDebuggerMCPServer {
           source: z.object({
             path: z.string().describe("Path to source file"),
           }).describe("Source file information"),
-          line: z.number().describe("Line number to check for breakpoint locations"),
-          column: z.number().optional().describe("Optional column number"),
-          endLine: z.number().optional().describe("Optional end line for range"),
-          endColumn: z.number().optional().describe("Optional end column for range"),
+          line: lineNumberSchema.describe("Line number to check for breakpoint locations"),
+          column: columnNumberSchema.optional().describe("Optional column number"),
+          endLine: lineNumberSchema.optional().describe("Optional end line for range"),
+          endColumn: columnNumberSchema.optional().describe("Optional end column for range"),
         },
       },
       async ({ source, line, column, endLine, endColumn }) => {
@@ -1016,8 +1052,8 @@ export class NodeDebuggerMCPServer {
         title: "Go To Target",
         description: "Jump to a specific line or target (DAP standard)",
         inputSchema: {
-          threadId: z.number().describe("Thread ID to perform goto on"),
-          targetId: z.number().describe("Target ID to jump to"),
+          threadId: idSchema.describe("Thread ID to perform goto on"),
+          targetId: idSchema.describe("Target ID to jump to"),
         },
       },
       async ({ threadId, targetId }) => {
@@ -1042,7 +1078,7 @@ export class NodeDebuggerMCPServer {
         title: "Restart Frame",
         description: "Restart execution from a specific stack frame (DAP standard)",
         inputSchema: {
-          frameId: z.number().describe("Stack frame ID to restart from"),
+          frameId: z.number().int().min(0).describe("Stack frame ID to restart from"),
         },
       },
       async ({ frameId }) => {

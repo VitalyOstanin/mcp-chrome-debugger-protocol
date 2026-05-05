@@ -61,15 +61,3 @@ export interface TrackedBreakpoint {
   timestamp: Date;
 }
 
-export interface SourceCodeContext {
-  filePath: string;
-  targetLine: number;
-  lines: Array<{
-    lineNumber: number;
-    content: string;
-    isTarget?: boolean;
-    hasBreakpoint?: boolean;
-    hasLogpoint?: boolean;
-  }>;
-  recommendation?: string;
-}

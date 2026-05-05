@@ -67,6 +67,15 @@ export class SourceMapResolver {
   }
 
   /**
+   * Heuristic for paths that may have a corresponding source map.
+   * Restricted to authored TypeScript files; the previous includes('src/') check matched any
+   * compiled JavaScript whose absolute path happened to contain 'src/' (e.g. node_modules).
+   */
+  private looksLikeOriginalSource(filePath: string): boolean {
+    return filePath.endsWith('.ts') || filePath.endsWith('.tsx') || filePath.endsWith('.mts') || filePath.endsWith('.cts');
+  }
+
+  /**
    * Resolve source map position for TypeScript/JavaScript mapping
    */
   async resolveSourceMapPosition(
@@ -79,11 +88,12 @@ export class SourceMapResolver {
     let targetColumnNumber = columnNumber;
     let sourceMapInfo: { success: boolean; sourceMapUsed?: string; matchedSource?: string } = { success: false };
 
-    if (filePath.endsWith('.ts') || filePath.includes('src/')) {
+    if (this.looksLikeOriginalSource(filePath)) {
       try {
         // Extract relative path for source map resolution
-        const relativePath = filePath.includes('src/')
-          ? filePath.substring(filePath.indexOf('src/'))
+        const srcMarkerIdx = filePath.lastIndexOf('/src/');
+        const relativePath = srcMarkerIdx !== -1
+          ? filePath.substring(srcMarkerIdx + 1)
           : filePath;
         // Find source map files from the target project directory
         const projectRoot = this.findProjectRootFromPath(filePath);
