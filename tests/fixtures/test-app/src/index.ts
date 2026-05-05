@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import express from "express";
-import getPort from "get-port";
+import type { AddressInfo } from "net";
 
 interface TestData {
   id: number;
@@ -146,12 +146,14 @@ async function main(): Promise<void> {
     });
   });
 
-  // Get port from environment variable or use get-port to find available port
+  // Get port from environment variable or let the OS assign a free one (port 0).
   const { MCP_TEST_APP_PORT } = process.env;
   const envPort = MCP_TEST_APP_PORT ? parseInt(MCP_TEST_APP_PORT, 10) : undefined;
-  const port = envPort && !isNaN(envPort) ? envPort : await getPort({ port: [3000, 3001, 3002, 3003, 3004] });
+  const requestedPort = envPort && !isNaN(envPort) ? envPort : 0;
 
-  const server = app.listen(port, () => {
+  const server = app.listen(requestedPort, () => {
+    const address = server.address() as AddressInfo | null;
+    const port = address?.port ?? requestedPort;
     console.log(`HTTP server listening on port ${port}`);
     console.log(`Endpoints available:`);
     console.log(`  GET http://localhost:${port}/test1`);

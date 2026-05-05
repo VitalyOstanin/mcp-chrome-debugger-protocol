@@ -126,8 +126,10 @@ export class TestAppManager {
           }
         });
 
-        this.process!.stderr?.on("data", () => {
-          // Suppress stderr in tests
+        this.process!.stderr?.on("data", (data) => {
+          // Surface stderr so a crashing fixture is not silently hidden behind
+          // "Process exited with code 1 before server was ready".
+          process.stderr.write(`[test-app] ${data}`);
         });
       });
     }
@@ -174,9 +176,14 @@ export class TestAppManager {
         }
       });
 
-      // Parse stderr for debugger URL - wait until we get the message
+      // Parse stderr for debugger URL - wait until we get the message.
+      // Always mirror stderr to the test runner so a crashing fixture is not silently
+      // hidden behind "Process exited with code 1 before services were ready".
       this.process!.stderr?.on("data", (data) => {
         const output = data.toString();
+
+        process.stderr.write(`[test-app] ${data}`);
+
         const parsedDebugInfo = this.parseDebuggerUrl(output);
 
         if (parsedDebugInfo && !debuggerReady) {

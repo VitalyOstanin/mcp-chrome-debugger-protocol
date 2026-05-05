@@ -1,4 +1,3 @@
-import { execSync } from "child_process";
 import path from "path";
 import { MCPClient } from "./utils/mcp-client";
 import { setGlobalMCPClient, spawnedProcesses } from "./globals";
@@ -7,12 +6,8 @@ import { setGlobalMCPClient, spawnedProcesses } from "./globals";
 export { globalMCPClient, spawnedProcesses } from "./globals";
 
 beforeAll(async () => {
-  // Build the main project
-  execSync("npm run build", { cwd: path.resolve(__dirname, ".."), stdio: "pipe" });
-
-  // Use prebuilt TypeScript fixture (dist is committed); no local install/build
-  // const testAppPath = path.resolve(__dirname, "fixtures/test-app");
-  // JavaScript test application uses vendored node_modules (no install step)
+  // Build steps live in tests/globalSetup.ts so they run once for the whole test run,
+  // not 4 times in parallel across workers (which races on shared output dirs).
   // Create global MCP client
   const serverPath = path.resolve(__dirname, "../dist/index.js");
   const client = new MCPClient(serverPath);

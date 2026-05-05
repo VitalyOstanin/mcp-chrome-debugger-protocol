@@ -17,5 +17,6 @@ module.exports = {
   testTimeout: 30000,
   maxWorkers: 4,
   setupFilesAfterEnv: ['<rootDir>/tests/setup.ts'],
+  globalSetup: '<rootDir>/tests/globalSetup.ts',
   globalTeardown: '<rootDir>/tests/teardown.ts',
 };
