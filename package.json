@@ -41,13 +41,13 @@
     "chrome-remote-interface",
     "claude"
   ],
-  "homepage": "https://github.com/vitalyostanin/mcp-chrome-debugger-protocol#readme",
+  "homepage": "https://github.com/VitalyOstanin/mcp-chrome-debugger-protocol#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/vitalyostanin/mcp-chrome-debugger-protocol.git"
+    "url": "git+https://github.com/VitalyOstanin/mcp-chrome-debugger-protocol.git"
   },
   "bugs": {
-    "url": "https://github.com/vitalyostanin/mcp-chrome-debugger-protocol/issues"
+    "url": "https://github.com/VitalyOstanin/mcp-chrome-debugger-protocol/issues"
   },
   "files": [
     "dist/**/*.js",
