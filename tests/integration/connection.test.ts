@@ -223,8 +223,6 @@ describe("MCP Chrome Debugger Protocol - Connection Tests", () => {
       expect(port).toBeDefined();
       expect(webSocketUrl).toBeDefined();
 
-      await setTimeout(2000);
-
       // First connection
       const connectResult1 = await mcpClient.callTool("attach", { url: webSocketUrl! });
       const connectData1 = JSON.parse(connectResult1.content[0].text);

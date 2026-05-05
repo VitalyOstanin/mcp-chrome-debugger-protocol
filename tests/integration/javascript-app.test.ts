@@ -124,7 +124,6 @@ describe("MCP Chrome Debugger Protocol - JavaScript App Tests", () => {
         appType: 'javascript',
       });
 
-      await setTimeout(2000);
       await debuggerHelper.connectToDebugger(port);
 
       // Test basic expression evaluation
@@ -184,7 +183,6 @@ describe("MCP Chrome Debugger Protocol - JavaScript App Tests", () => {
         appType: 'javascript',
       });
 
-      await setTimeout(2000);
       await debuggerHelper.connectToDebugger(port);
 
       const mainScriptPath = await debuggerHelper.getMainScriptPath();

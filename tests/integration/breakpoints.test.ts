@@ -158,7 +158,6 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
       expect(pid).toBeDefined();
       expect(port).toBeDefined();
 
-      await setTimeout(2000);
       await debuggerHelper.connectToDebugger(port);
 
       const mainScriptPath = await debuggerHelper.getMainScriptPath();
@@ -188,7 +187,6 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
       expect(pid).toBeDefined();
       expect(port).toBeDefined();
 
-      await setTimeout(2000);
       await debuggerHelper.connectToDebugger(port);
 
       const mainScriptPath = await debuggerHelper.getMainScriptPath();
@@ -211,7 +209,6 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
       expect(port).toBeDefined();
       expect(serverPort).toBeDefined();
 
-      await setTimeout(2000);
       await debuggerHelper.connectToDebugger(port);
 
       const mainScriptPath = await debuggerHelper.getMainScriptPath();
@@ -620,8 +617,18 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
 
       expect(response.ok).toBe(true);
 
-      // Wait for logpoint to be hit
-      await setTimeout(2000);
+      // Wait until the headers logpoint actually fires instead of sleeping a fixed window.
+      try {
+        await waitForLogpoint(
+          mcpClient,
+          (hit) => (hit.payload?.message ?? hit.message ?? "").includes("headers:"),
+          { timeoutMs: 3000 },
+        );
+      } catch {
+        // The original test tolerates the logpoint not firing (logpointResult is the only hard
+        // assertion); preserve that behavior so we don't flip a previously-soft check into a
+        // hard failure.
+      }
 
       // Check if logpoint hits were captured
       const logHitsResult = await mcpClient.callTool("getLogpointHits");
@@ -726,7 +733,6 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
       expect(pid).toBeDefined();
       expect(port).toBeDefined();
 
-      await setTimeout(2000);
       await debuggerHelper.connectToDebugger(port);
 
       // Generate some events
@@ -758,7 +764,6 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
       expect(port).toBeDefined();
       expect(serverPort).toBeDefined();
 
-      await setTimeout(2000);
       await debuggerHelper.connectToDebugger(port);
 
       const mainScriptPath = await debuggerHelper.getMainScriptPath();
@@ -830,7 +835,6 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
       expect(pid).toBeDefined();
       expect(port).toBeDefined();
 
-      await setTimeout(2000);
       await debuggerHelper.connectToDebugger(port);
 
       const mainScriptPath = await debuggerHelper.getMainScriptPath();
@@ -859,7 +863,6 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
       expect(pid).toBeDefined();
       expect(port).toBeDefined();
 
-      await setTimeout(2000);
       await debuggerHelper.connectToDebugger(port);
 
       const mainScriptPath = await debuggerHelper.getMainScriptPath();
@@ -890,7 +893,6 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
       expect(pid).toBeDefined();
       expect(port).toBeDefined();
 
-      await setTimeout(2000);
       await debuggerHelper.connectToDebugger(port);
 
       // Test with a TypeScript file path (should trigger source map resolution)
@@ -916,7 +918,6 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
       expect(pid).toBeDefined();
       expect(port).toBeDefined();
 
-      await setTimeout(2000);
       await debuggerHelper.connectToDebugger(port);
 
       // Test logpoint with TypeScript file path
@@ -944,7 +945,6 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
       expect(port).toBeDefined();
       expect(serverPort).toBeDefined();
 
-      await setTimeout(2000);
       await debuggerHelper.connectToDebugger(port);
 
       // Clear any existing logpoint hits
