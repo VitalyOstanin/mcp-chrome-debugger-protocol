@@ -19,7 +19,10 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Bound the publish gate so a hung integration test (real Node.js inspector
+    # debuggee) cannot eat the GitHub Actions default 6h budget. Mirrors the
+    # 25-min cap in node.js.yml.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -29,6 +32,16 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test
+
+      - name: Run integration tests
+        # Gate the publish on the same integration suite that node.js.yml runs
+        # against master/PRs. Without this, a regression that breaks integration
+        # but passes unit tests + smoke install would still be published.
+        # Step-level cap mirrors node.js.yml: integration normally finishes in
+        # ~9 min on CI; fail the step at 18 so the job can still finish below
+        # its 25-min budget instead of being killed mid-publish-prep.
+        timeout-minutes: 18
+        run: npm run test:integration
 
       - name: Smoke pack-and-install
         # Build a real tarball, install it into a clean throwaway project, and
