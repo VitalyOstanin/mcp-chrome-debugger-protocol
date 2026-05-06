@@ -641,6 +641,24 @@ export class DAPClient extends EventEmitter {
     try {
       let activation: 'strace' | 'poll' | 'timeout' = 'timeout';
 
+      // Verify the target process exists before sending SIGUSR1. Without this
+      // check, a typo in pid sends an arbitrary signal to whatever process
+      // happens to live at that pid (for many daemons SIGUSR1 triggers a log
+      // reopen / state dump).
+      try {
+        kill(pid, 0);
+      } catch (probeError) {
+        const code = (probeError as NodeJS.ErrnoException | undefined)?.code;
+
+        return createErrorResponse(
+          'Target process not found',
+          `pid=${pid} cannot receive signals (${code ?? 'unknown error'}). ` +
+          'Verify the PID belongs to a running Node.js process owned by the current user.',
+          'PID_NOT_FOUND',
+          { pid },
+        );
+      }
+
       // Send SIGUSR1 to request inspector activation.
       kill(pid, 'SIGUSR1');
 
@@ -668,8 +686,30 @@ export class DAPClient extends EventEmitter {
     }
   }
 
+  // Hosts that pass the loopback gate without explicit opt-in. Anything else
+  // requires MCP_CDP_ALLOW_REMOTE=1 in the environment.
+  private static readonly LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+  private isLoopbackHost(host: string | undefined): boolean {
+    if (host === undefined) return true;
+
+    return DAPClient.LOOPBACK_HOSTS.has(host.toLowerCase());
+  }
+
   async attachToProcess(args: { port?: number; address?: string }): Promise<MCPResponse> {
     try {
+      const host = args.address ?? DEFAULTS.INSPECTOR_CLIENT_HOST;
+
+      if (!this.isLoopbackHost(host) && process.env.MCP_CDP_ALLOW_REMOTE !== '1') {
+        return createErrorResponse(
+          'Remote inspector attach blocked',
+          `Refusing to attach to non-loopback host '${host}'. ` +
+          'Set MCP_CDP_ALLOW_REMOTE=1 to allow remote inspector connections.',
+          'CDP_REMOTE_BLOCKED',
+          { host },
+        );
+      }
+
       // Create new debug adapter instance
       this.connection.adapter = new NodeJSDebugAdapter();
       this.setupAdapterEventHandlers(this.connection.adapter);

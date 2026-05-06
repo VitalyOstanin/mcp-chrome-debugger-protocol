@@ -619,23 +619,15 @@ export class NodeDebuggerMCPServer {
         )),
     );
 
-    // Additional DAP tools for complete protocol coverage
-
-    this.server.registerTool(
-      "launch",
-      {
-        title: "Launch Program",
-        description: "Launch a Node.js program with debugging enabled (DAP standard)",
-        inputSchema: {
-          program: z.string().describe("Path to the Node.js program to launch"),
-          args: z.array(z.string()).optional().describe("Command line arguments for the program"),
-          cwd: z.string().optional().describe("Working directory for the program"),
-          env: z.record(z.string(), z.string()).optional().describe("Environment variables"),
-        },
-      },
-      async ({ program, args, cwd, env }) =>
-        this.runGatedTool("launch", () => this.debuggerManager.launch({ program, args, cwd, env })),
-    );
+    // Additional DAP tools for complete protocol coverage.
+    //
+    // The DAP `launch` request is intentionally not registered: this server
+    // always attaches to an externally-spawned Node.js process (see attach
+    // tool above). Exposing a launch tool that just throws would only confuse
+    // tools/list consumers. If launch support is added later, it must (a)
+    // validate `program` against an allow-list, (b) not inherit process.env
+    // wholesale into the spawned child, and (c) only expose itself to clients
+    // that explicitly opt in -- see security review notes for context.
 
     this.server.registerTool(
       "threads",
