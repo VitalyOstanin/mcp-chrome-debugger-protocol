@@ -118,6 +118,10 @@ export class CDPTransport extends EventEmitter {
       }
     }
 
+    // Reset the counter after exhausting retries so a follow-up disconnect
+    // event can start a fresh reconnect cycle instead of seeing the counter
+    // pinned at maxReconnectAttempts forever.
+    this.reconnectAttempts = 0;
     this.emit('error', new Error('Max reconnection attempts reached'));
   }
 

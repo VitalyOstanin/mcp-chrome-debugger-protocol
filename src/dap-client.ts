@@ -114,10 +114,20 @@ export class DAPClient extends EventEmitter {
   }
 
   private setupAdapterEventHandlers(adapter: NodeJSDebugAdapter): void {
-    // Handle stopped events (breakpoints, stepping, etc.)
-    const originalSendEvent = adapter.sendEvent;
+    // Adapter sendEvent is monkey-patched (DebugSession does not expose
+    // generic event subscription on the public surface for these events). Tag
+    // the wrapper so a second setup pass on the same adapter does not stack
+    // wrappers and fan-out duplicate events to the client.
+    const tagged = adapter.sendEvent as ((event: DebugProtocol.Event) => void) & {
+      __mcpDapClientWrapped?: boolean;
+    };
 
-    adapter.sendEvent = (event) => {
+    if (tagged.__mcpDapClientWrapped) {
+      return;
+    }
+
+    const originalSendEvent = adapter.sendEvent;
+    const wrapped = ((event: DebugProtocol.Event) => {
       originalSendEvent.call(adapter, event);
 
       if (event.event === 'stopped') {
@@ -181,7 +191,10 @@ export class DAPClient extends EventEmitter {
       } else if (event.event === 'continued') {
         this.handleContinuedEvent();
       }
-    };
+    }) as ((event: DebugProtocol.Event) => void) & { __mcpDapClientWrapped?: boolean };
+
+    wrapped.__mcpDapClientWrapped = true;
+    adapter.sendEvent = wrapped;
   }
 
   private handleStoppedEvent(event: DebugProtocol.StoppedEvent): void {
@@ -693,6 +706,8 @@ export class DAPClient extends EventEmitter {
   }
 
   async disconnect(): Promise<void> {
+    const wasConnected = this.connection.isConnected;
+
     if (this.connection.adapter) {
       try {
         // Call the adapter's disconnect directly: 'disconnect' is not registered
@@ -707,7 +722,12 @@ export class DAPClient extends EventEmitter {
     }
 
     this.connection.isConnected = false;
-    this.emitStateChange(false);
+    // Emit only on a real transition; disconnect() is callable multiple times
+    // (defensive cleanup) and external subscribers should not see phantom
+    // disconnect events when nothing actually changed.
+    if (wasConnected) {
+      this.emitStateChange(false);
+    }
   }
 
   // Breakpoint management

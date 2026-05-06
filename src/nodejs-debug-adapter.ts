@@ -23,6 +23,19 @@ import {
   renderLogpointMessage,
 } from './logpoint.js';
 
+// The @vscode/debugadapter Breakpoint class does not publish source/id in its
+// public type, but DebugProtocol.Breakpoint requires them. Centralise the cast
+// in one helper so the rest of the adapter stays type-safe.
+function assignDapBreakpointFields(
+  bp: Breakpoint,
+  fields: Pick<DebugProtocol.Breakpoint, 'source' | 'id'>,
+): void {
+  const target = bp as unknown as DebugProtocol.Breakpoint;
+
+  if (fields.source !== undefined) target.source = fields.source;
+  if (fields.id !== undefined) target.id = fields.id;
+}
+
 export interface NodeJSLaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
   program: string;
   args?: string[] | undefined;
@@ -255,11 +268,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       });
 
       this.nodeProcess.stderr?.on("data", (data) => {
-        const output = data.toString();
-
-        this.sendEvent(new OutputEvent(output, "stderr"));
-
-        // Node.js debugger output - DAP handles connection automatically
+        this.sendEvent(new OutputEvent(data.toString(), "stderr"));
       });
 
       this.logSourceMapConfig(args);
@@ -780,11 +789,17 @@ export class NodeJSDebugAdapter extends DebugSession {
     const actualBp = new Breakpoint(verified, line, column);
     const sourceName = path.split("/").pop();
 
-    (actualBp as unknown as DebugProtocol.Breakpoint).source = {
-      ...(sourceName !== undefined ? { name: sourceName } : {}),
-      path,
-    };
-    (actualBp as unknown as DebugProtocol.Breakpoint).id = dapId;
+    // The @vscode/debugadapter Breakpoint helper does not surface `source` and
+    // `id` on its public type, even though DebugProtocol.Breakpoint requires
+    // them. Cast the helper to the protocol shape once via this assigner so
+    // call sites stay type-safe.
+    assignDapBreakpointFields(actualBp, {
+      source: {
+        ...(sourceName !== undefined ? { name: sourceName } : {}),
+        path,
+      },
+      id: dapId,
+    });
 
     return { runtimeBp, actualBp };
   }
