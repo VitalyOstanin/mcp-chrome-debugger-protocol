@@ -3,13 +3,20 @@ import { setTimeout } from "node:timers/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-// Common error messages
+/**
+ * Canonical error strings reused across MCP tools so wording stays consistent
+ * in client-visible responses and unit tests can assert on a stable value.
+ */
 export const ERROR_MESSAGES = {
   NOT_CONNECTED: "Not connected to debugger",
   CONNECTION_REQUIRED: "Use attach first to connect to the debugger.",
 } as const;
 
-// Common response structure for MCP tools
+/**
+ * Wire-format envelope for every MCP tool response. The single `text` chunk
+ * carries the JSON-stringified ToolResponse; clients parse it back into
+ * SuccessResponse | ErrorResponse.
+ */
 export interface MCPResponse {
   content: Array<{
     type: string;
@@ -17,7 +24,12 @@ export interface MCPResponse {
   }>;
 }
 
-// Standardized response interfaces
+/**
+ * Failure payload returned inside MCPResponse.text. `error` is the short
+ * machine-friendly summary, `message` (when present) is the underlying
+ * exception text, `code` is the stable error category for programmatic
+ * branching, and `details` carries free-form context for diagnostics.
+ */
 export interface ErrorResponse {
   success: false;
   error: string;
@@ -26,14 +38,23 @@ export interface ErrorResponse {
   details?: Record<string, unknown>;
 }
 
+/**
+ * Success payload returned inside MCPResponse.text. `data` is whatever the
+ * specific tool decided to return — see each tool registration for its shape.
+ */
 export interface SuccessResponse<T = unknown> {
   success: true;
   data: T;
 }
 
+/** Discriminated union of the two ToolResponse shapes — switch on `success`. */
 export type ToolResponse<T = unknown> = SuccessResponse<T> | ErrorResponse;
 
-// Helper to create error responses
+/**
+ * Build an MCPResponse wrapping an ErrorResponse JSON body. Used directly when
+ * a tool needs custom error code/details; for the common try/catch path prefer
+ * `withErrorHandling`.
+ */
 export function createErrorResponse(
   error: string,
   message?: string,
@@ -56,7 +77,11 @@ export function createErrorResponse(
   };
 }
 
-// Helper to create success responses
+/**
+ * Build an MCPResponse wrapping a SuccessResponse JSON body. The generic `T`
+ * is preserved purely for documentation/IDE hints — the body is JSON-stringified
+ * so type info is not transmitted on the wire.
+ */
 export function createSuccessResponse<T>(data: T): MCPResponse {
   const response: SuccessResponse<T> = {
     success: true,
@@ -71,7 +96,13 @@ export function createSuccessResponse<T>(data: T): MCPResponse {
   };
 }
 
-// Generic error handler utility
+/**
+ * Run `operation` and convert the outcome to an MCPResponse: a SuccessResponse
+ * wrapping its return value, or an ErrorResponse with code `OPERATION_FAILED`
+ * and `details = context` carrying both operation name and any extra fields the
+ * caller passed in. Use this for every tool handler so error wrapping is
+ * uniform across the server.
+ */
 export async function withErrorHandling<T>(
   operation: () => Promise<T>,
   context: { operation: string; [key: string]: unknown },
@@ -90,24 +121,34 @@ export async function withErrorHandling<T>(
   }
 }
 
-// Helper to check if debugger is connected
+/**
+ * Throw the canonical NOT_CONNECTED error if the debugger is not attached.
+ * Use at the top of any tool handler that requires a live DAP/CDP session
+ * before doing real work.
+ */
 export function requireConnection(isConnected: boolean): void {
   if (!isConnected) {
     throw new Error(ERROR_MESSAGES.NOT_CONNECTED);
   }
 }
 
-// Utility function for delays using Node.js promise timers
+/**
+ * Promise-based sleep: `await sleep(ms)`. Re-export of node:timers/promises
+ * setTimeout so callers do not have to remember the import path.
+ */
 export const sleep = setTimeout;
 
-// Walk up from startDir looking for a package.json. Returns the directory that
-// contains it, or null if none found before reaching the filesystem root.
-// DAPDebuggerManager and SourceMapResolver used to inline two slightly different
-// copies of this; centralise so a future change touches one place.
-//
-// Result is memoised by startDir within the process. Project structure does not
-// change at runtime, and findProjectRoot is on the source-map / setBreakpoints
-// hot path -- dropping the per-call existsSync chain is worth a tiny Map.
+/**
+ * Walk up from `startDir` looking for a `package.json`. Returns the directory
+ * that contains it, or null if none found before reaching the filesystem root.
+ * DAPDebuggerManager and SourceMapResolver used to inline two slightly
+ * different copies of this; centralise so a future change touches one place.
+ *
+ * Result is memoised by `startDir` within the process. Project structure does
+ * not change at runtime, and findProjectRoot is on the source-map /
+ * setBreakpoints hot path — dropping the per-call existsSync chain is worth a
+ * tiny Map.
+ */
 const projectRootCache = new Map<string, string | null>();
 
 export function findProjectRoot(startDir: string): string | null {

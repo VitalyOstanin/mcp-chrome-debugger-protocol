@@ -63,8 +63,8 @@ flowchart LR
 
 ## Requirements
 
-- Node.js >= 22 (matches `engines.node` in `package.json`; CI runs Node 22 and 24).
-- npm >= 11 (only required when publishing).
+- Node.js >= 22 (matches `engines.node` in `package.json`; CI runs Node 22 and 24, and `.nvmrc` pins the recommended local version).
+- npm >= 11 (required only for `npm publish`; everyday development works on npm 10+).
 
 ## Installation
 
@@ -90,11 +90,18 @@ claude mcp remove chrome-debugger-protocol --scope user
 - `--scope user`: Remove from user configuration
 - `--scope project`: Remove from project configuration
 
-## Security notes
+## Security model
 
+Run this server only in a trusted local environment (developer workstation, IDE, CI sandbox owned by you). It is **not** designed to sit behind a public proxy or be shared between mutually-distrusting clients.
+
+What an MCP client can do once connected:
+- `evaluate`, `setBreakpoints` with `condition`, and logpoint `{expr}` placeholders run arbitrary JavaScript in the debuggee process. Anyone who can talk to this server is effectively root inside the target Node.js process.
+- `attach` can request a connection by hostname. By default the server refuses non-loopback hosts; set `MCP_CDP_ALLOW_REMOTE=1` only when you control both ends and have a reason to.
+- Logpoint hits are buffered (up to 10,000 entries) and returned on demand. Avoid placing logpoints whose `{expr}` references secrets/PII in a long-lived debug session -- a later `getLogpointHits` will still see them until the buffer is cleared or the entries are evicted FIFO.
+
+Operational guidance:
 - `node --inspect` binds the inspector to `127.0.0.1` by default (since Node 7+). Never run it as `--inspect=0.0.0.0` on a multi-tenant or network-exposed host: the V8 inspector exposes `Runtime.evaluate`, which is unauthenticated arbitrary code execution against the debuggee.
 - The MCP server attaches over WebSocket to `localhost`. To debug a remote process, tunnel via SSH (`ssh -L 9229:127.0.0.1:9229 host`) instead of opening port 9229 to the network.
-- Both the `evaluate` tool and breakpoint `condition` / `logMessage` placeholders execute arbitrary JavaScript in the debuggee process by design. Treat any MCP client connected to this server as if it had full code execution rights inside the target Node.js process.
 
 ## Quick Start
 
@@ -135,6 +142,10 @@ npm run dev                # tsc --watch (incremental compile only)
 npm run dev:server         # build + run MCP server (stdio)
 npm run dev:test           # launch the test-app fixture under --inspect for manual attach
 ```
+
+End-to-end loop in 30 seconds: run `npm run dev:test` in one terminal (it starts the test-app fixture under `--inspect=9229`), then in another terminal run the MCP server (`npm run dev:server`) and use the `attach` tool from your client.
+
+Formatting: this project relies on ESLint plus `.editorconfig`. There is no separate `prettier` configuration, and there is no `npm run format` script -- run `npm run lint:fix` to apply style fixes. If your editor inserts conflicting formatting, configure it to defer to ESLint.
 
 See [AGENTS.md](AGENTS.md) for detailed contributor rules and project conventions.
 

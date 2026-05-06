@@ -547,8 +547,11 @@ export class NodeJSDebugAdapter extends DebugSession {
   }
 
   private handleConsoleAPI(params: Protocol.Runtime.ConsoleAPICalledEvent): void {
+    // Reuse remoteObjectToString so console.log({ a: 1 }) shows as `{"a":1}` and
+    // Error remotes carry their description; the previous implementation
+    // collapsed every non-primitive to "[object Object]".
     const args = params.args
-      .map((arg: Protocol.Runtime.RemoteObject) => arg.value ?? arg.description ?? "[object]")
+      .map((arg: Protocol.Runtime.RemoteObject) => this.remoteObjectToString(arg))
       .join(" ");
 
     this.sendEvent(new OutputEvent(`${args}\n`, "stdout"));
