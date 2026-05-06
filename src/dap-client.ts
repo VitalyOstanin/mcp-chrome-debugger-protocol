@@ -229,6 +229,63 @@ export class DAPClient extends EventEmitter {
     this.emit('debuggerResumed', debuggerEvent);
   }
 
+  // Dispatch table for DAP methods. Each handler receives (adapter, params, requestId)
+  // and returns the response payload. Side-effecting handlers (attach, terminate)
+  // toggle connection state inline.
+  private readonly dapHandlers: Partial<Record<string, (
+    adapter: NodeJSDebugAdapter,
+    params: unknown,
+    requestId: number,
+  ) => unknown | Promise<unknown>>> = {
+    initialize: (_adapter, _params, requestId) => this.buildInitializeResponse(requestId),
+    attach: async (adapter, params, requestId) => {
+      const attachResult = await adapter.attach(params as NodeJSAttachRequestArguments);
+
+      if (!attachResult.success) {
+        throw new Error(attachResult.message ?? 'Attach failed');
+      }
+
+      this.connection.isConnected = true;
+      this.emitStateChange(true);
+
+      return {
+        seq: 0,
+        type: 'response',
+        request_seq: requestId,
+        command: 'attach',
+        success: true,
+      };
+    },
+    launch: (_adapter, params, requestId) => this.buildLaunchResponse(requestId, params as NodeJSLaunchRequestArguments),
+    setBreakpoints: (adapter, params) => adapter.setBreakpoints(params as DebugProtocol.SetBreakpointsArguments),
+    continue: (adapter, params) => adapter.continueExecution(params as DebugProtocol.ContinueArguments),
+    pause: (adapter, params) => adapter.pauseExecution(params as DebugProtocol.PauseArguments),
+    stepIn: (adapter, params) => adapter.stepIn(params as DebugProtocol.StepInArguments),
+    stepOut: (adapter, params) => adapter.stepOut(params as DebugProtocol.StepOutArguments),
+    next: (adapter, params) => adapter.next(params as DebugProtocol.NextArguments),
+    evaluate: (adapter, params) => adapter.evaluate(params as DebugProtocol.EvaluateArguments),
+    stackTrace: (adapter, params) => adapter.stackTrace(params as DebugProtocol.StackTraceArguments),
+    threads: (adapter) => adapter.threads(),
+    scopes: (adapter, params) => adapter.scopes(params as DebugProtocol.ScopesArguments),
+    variables: (adapter, params) => adapter.variables(params as DebugProtocol.VariablesArguments),
+    setVariable: (adapter, params) => adapter.setVariable(params as DebugProtocol.SetVariableArguments),
+    loadedSources: (adapter) => adapter.loadedSources(),
+    exceptionInfo: (adapter, params) => adapter.exceptionInfo(params as DebugProtocol.ExceptionInfoArguments),
+    setExceptionBreakpoints: (adapter, params) => adapter.setExceptionBreakpoints(params as DebugProtocol.SetExceptionBreakpointsArguments),
+    breakpointLocations: (adapter, params) => adapter.breakpointLocations(params as DebugProtocol.BreakpointLocationsArguments),
+    restartFrame: (adapter, params) => adapter.restartFrame(params as DebugProtocol.RestartFrameArguments),
+    goto: (adapter, params) => adapter.goto(params as DebugProtocol.GotoArguments),
+    terminate: async (adapter) => {
+      const response = await adapter.terminate();
+
+      this.connection.isConnected = false;
+      this.emitStateChange(false);
+
+      return response;
+    },
+    restart: (adapter) => adapter.restart(),
+  };
+
   private async sendRequest<T = unknown>(
     method: string,
     params: unknown = {},
@@ -270,99 +327,13 @@ export class DAPClient extends EventEmitter {
             throw new Error('Debug adapter not available');
           }
 
-          let response: unknown;
+          const handler = this.dapHandlers[method];
 
-          switch (method) {
-            case 'initialize':
-              response = this.buildInitializeResponse(requestId);
-              break;
-            case 'attach': {
-              const attachResult = await adapter.attach(params as NodeJSAttachRequestArguments);
-
-              if (!attachResult.success) {
-                throw new Error(attachResult.message ?? 'Attach failed');
-              }
-
-              this.connection.isConnected = true;
-              this.emitStateChange(true);
-
-              response = {
-                seq: 0,
-                type: 'response',
-                request_seq: requestId,
-                command: 'attach',
-                success: true,
-              };
-              break;
-            }
-            case 'launch':
-              response = await this.buildLaunchResponse(requestId, params as NodeJSLaunchRequestArguments);
-              break;
-            case 'setBreakpoints':
-              response = await adapter.setBreakpoints(params as DebugProtocol.SetBreakpointsArguments);
-              break;
-            case 'continue':
-              response = await adapter.continueExecution(params as DebugProtocol.ContinueArguments);
-              break;
-            case 'pause':
-              response = await adapter.pauseExecution(params as DebugProtocol.PauseArguments);
-              break;
-            case 'stepIn':
-              response = await adapter.stepIn(params as DebugProtocol.StepInArguments);
-              break;
-            case 'stepOut':
-              response = await adapter.stepOut(params as DebugProtocol.StepOutArguments);
-              break;
-            case 'next':
-              response = await adapter.next(params as DebugProtocol.NextArguments);
-              break;
-            case 'evaluate':
-              response = await adapter.evaluate(params as DebugProtocol.EvaluateArguments);
-              break;
-            case 'stackTrace':
-              response = adapter.stackTrace(params as DebugProtocol.StackTraceArguments);
-              break;
-            case 'threads':
-              response = adapter.threads();
-              break;
-            case 'scopes':
-              response = adapter.scopes(params as DebugProtocol.ScopesArguments);
-              break;
-            case 'variables':
-              response = await adapter.variables(params as DebugProtocol.VariablesArguments);
-              break;
-            case 'setVariable':
-              response = await adapter.setVariable(params as DebugProtocol.SetVariableArguments);
-              break;
-            case 'loadedSources':
-              response = adapter.loadedSources();
-              break;
-            case 'exceptionInfo':
-              response = adapter.exceptionInfo(params as DebugProtocol.ExceptionInfoArguments);
-              break;
-            case 'setExceptionBreakpoints':
-              response = await adapter.setExceptionBreakpoints(params as DebugProtocol.SetExceptionBreakpointsArguments);
-              break;
-            case 'breakpointLocations':
-              response = await adapter.breakpointLocations(params as DebugProtocol.BreakpointLocationsArguments);
-              break;
-            case 'restartFrame':
-              response = await adapter.restartFrame(params as DebugProtocol.RestartFrameArguments);
-              break;
-            case 'goto':
-              response = adapter.goto(params as DebugProtocol.GotoArguments);
-              break;
-            case 'terminate':
-              response = await adapter.terminate();
-              this.connection.isConnected = false;
-              this.emitStateChange(false);
-              break;
-            case 'restart':
-              response = await adapter.restart();
-              break;
-            default:
-              throw new Error(`Unsupported DAP method: ${method}`);
+          if (!handler) {
+            throw new Error(`Unsupported DAP method: ${method}`);
           }
+
+          const response = await handler(adapter, params, requestId);
 
           this.resolveRequest(requestId, response);
         } catch (error) {
@@ -466,178 +437,181 @@ export class DAPClient extends EventEmitter {
     return this.attachToProcess({ port, ...(address !== undefined && { address }) });
   }
 
+  // Best-effort check whether a CLI is available on PATH.
+  private async isCommandAvailable(cmd: string, args: string[] = ["-V"]): Promise<boolean> {
+    return new Promise((resolve) => {
+      try {
+        const p = spawn(cmd, args);
+        let done = false;
+        const finish = (ok: boolean) => {
+          if (!done) {
+            done = true;
+            resolve(ok);
+            try {
+              p.kill();
+            } catch {
+              /* ignore */
+            }
+          }
+        };
+
+        p.once("spawn", () => { finish(true); });
+        p.once("error", () => { finish(false); });
+
+        setTimeout(() => { finish(true); }, 200).unref();
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
+  // Probe Node inspector's /json/version endpoint to verify a port is live.
+  private probeInspector(probePort: number, timeoutMs = 500): Promise<boolean> {
+    return new Promise((resolve) => {
+      const req = http.get(
+        { host: '127.0.0.1', port: probePort, path: '/json/version', timeout: timeoutMs },
+        (res) => {
+          const ok = res.statusCode !== undefined && res.statusCode >= 200 && res.statusCode < 500;
+
+          res.resume();
+          resolve(ok);
+        },
+      );
+
+      req.on('timeout', () => { req.destroy(); resolve(false); });
+      req.on('error', () => { resolve(false); });
+    });
+  }
+
+  // Use strace to observe Node inspector activation messages (Linux only, best-effort).
+  // Returns the detected port if found, undefined otherwise.
+  private async detectInspectorPortViaStrace(pid: number): Promise<number | undefined> {
+    if (process.platform === 'win32') return undefined;
+    if (!(await this.isCommandAvailable('strace', ['-V']))) return undefined;
+
+    let strace: ReturnType<typeof spawn>;
+
+    try {
+      strace = spawn("strace", ["-p", String(pid), "-e", "write", "-s", "200", "-f"]);
+    } catch {
+      return undefined;
+    }
+
+    return new Promise<number | undefined>((resolve) => {
+      let detectedPort: number | undefined;
+      const onData = (buf: Buffer) => {
+        const out = buf.toString();
+        const fullUrlMatch = out.match(/Debugger listening on (ws:\/\/[^\s]+)/);
+        const portMatch = out.match(/Debugger listening on (?:port )?(\d+)/);
+
+        if (fullUrlMatch) {
+          const m = fullUrlMatch[1].match(/:(\d+)/);
+
+          if (m) detectedPort = parseInt(m[1], 10);
+          cleanup();
+          resolve(detectedPort);
+        } else if (portMatch) {
+          detectedPort = parseInt(portMatch[1], 10);
+          cleanup();
+          resolve(detectedPort);
+        }
+      };
+      const onExit = () => { resolve(detectedPort); };
+      const cleanup = () => {
+        strace.stderr?.off("data", onData);
+        strace.stdout?.off("data", onData);
+        strace.off("exit", onExit);
+        try {
+          strace.kill();
+        } catch {
+          /* ignore */
+        }
+      };
+
+      strace.stderr?.on("data", onData);
+      strace.stdout?.on("data", onData);
+      strace.once("exit", onExit);
+
+      setTimeout(() => {
+        cleanup();
+        resolve(detectedPort);
+      }, DEFAULTS.STRACE_TIMEOUT_MS).unref();
+    });
+  }
+
+  // Poll candidate inspector ports until one responds or the deadline expires.
+  private async pollForInspectorPort(opts?: {
+    discoverTimeoutMs?: number;
+    probeTimeoutMs?: number;
+    ports?: number[];
+  }): Promise<number | undefined> {
+    const candidates: number[] = opts?.ports?.length
+      ? opts.ports
+      : Array.from(
+        { length: INSPECTOR_PORT_RANGE.end - INSPECTOR_PORT_RANGE.start + 1 },
+        (_, i) => INSPECTOR_PORT_RANGE.start + i,
+      );
+    const deadline = Date.now() + (opts?.discoverTimeoutMs ?? DEFAULTS.DISCOVER_TIMEOUT_MS);
+
+    while (Date.now() < deadline) {
+      for (const cand of candidates) {
+        const ok = await this.probeInspector(cand, opts?.probeTimeoutMs ?? DEFAULTS.PROBE_TIMEOUT_MS);
+
+        if (ok) return cand;
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    return undefined;
+  }
+
+  private enrichAttachResult(
+    attachResult: MCPResponse,
+    activation: 'strace' | 'poll' | 'timeout',
+    detectedPort: number,
+  ): MCPResponse {
+    try {
+      const parsed = JSON.parse(attachResult.content[0].text);
+
+      return createSuccessResponse({
+        ...parsed,
+        debug: {
+          activation,
+          detectedPort,
+          webSocketUrl: this.webSocketUrl,
+        },
+      });
+    } catch {
+      return attachResult;
+    }
+  }
+
   async enableDebuggerPid(
     pid: number,
     opts?: { discoverTimeoutMs?: number; probeTimeoutMs?: number; ports?: number[] },
   ): Promise<MCPResponse> {
     try {
       let activation: 'strace' | 'poll' | 'timeout' = 'timeout';
-      let detectedPort: number | undefined;
-      let detectedUrl: string | undefined;
-      // Helper: check command availability quickly
-      const isCommandAvailable = async (cmd: string, args: string[] = ["-V"]): Promise<boolean> =>
-        new Promise((resolve) => {
-          try {
-            const p = spawn(cmd, args);
-            let done = false;
-            const finish = (ok: boolean) => {
-              if (!done) {
-                done = true;
-                resolve(ok);
-                try {
-                  p.kill();
-                } catch {
-                  void 0;
-                }
-              }
-            };
 
-            p.once("spawn", () => {
-              finish(true);
-            });
-            p.once("error", () => {
-              finish(false);
-            });
-
-            setTimeout(() => {
-              finish(true);
-            }, 200).unref();
-          } catch {
-            resolve(false);
-          }
-        });
-      // Helper: probe inspector HTTP endpoint
-      const probeInspector = (probePort: number, timeoutMs = 500): Promise<boolean> => new Promise((resolve) => {
-        const req = http.get({ host: '127.0.0.1', port: probePort, path: '/json/version', timeout: timeoutMs }, (res) => {
-          const ok = res.statusCode !== undefined && res.statusCode >= 200 && res.statusCode < 500;
-
-          res.resume();
-          resolve(ok);
-        });
-
-        req.on('timeout', () => { req.destroy(); resolve(false); });
-        req.on('error', () => { resolve(false); });
-      });
-      // Try to observe debugger activation via strace (Linux only, best-effort)
-      const canUseStrace = process.platform !== 'win32' && await isCommandAvailable('strace', ['-V']);
-      let strace: ReturnType<typeof spawn> | null = null;
-
-      try {
-        strace = canUseStrace ? spawn("strace", ["-p", String(pid), "-e", "write", "-s", "200", "-f"]) : null;
-      } catch {
-        strace = null;
-      }
-
-      let waitForDebuggerLine: () => Promise<void>;
-
-      if (!strace) {
-        waitForDebuggerLine = async () => {
-          /* no-op */
-        };
-      } else {
-        const sLocal = strace;
-
-        waitForDebuggerLine = () =>
-          new Promise<void>((resolve) => {
-            const onData = (buf: Buffer) => {
-              const out = buf.toString();
-              // Look for typical Node inspector messages
-              const fullUrlMatch = out.match(/Debugger listening on (ws:\/\/[^\s]+)/);
-              const portMatch = out.match(/Debugger listening on (?:port )?(\d+)/);
-
-              if (fullUrlMatch) {
-                detectedUrl = fullUrlMatch[1];
-
-                const m = detectedUrl.match(/:(\d+)/);
-
-                if (m) detectedPort = parseInt(m[1], 10);
-                activation = "strace";
-                cleanup();
-                resolve();
-              } else if (portMatch) {
-                detectedPort = parseInt(portMatch[1], 10);
-                activation = "strace";
-                cleanup();
-                resolve();
-              }
-            };
-            const onExit = () => {
-              resolve();
-            };
-            const cleanup = () => {
-              sLocal.stderr?.off("data", onData);
-              sLocal.stdout?.off("data", onData);
-              sLocal.off("exit", onExit);
-              try {
-                sLocal.kill();
-              } catch {
-                void 0;
-              }
-            };
-
-            sLocal.stderr?.on("data", onData);
-            sLocal.stdout?.on("data", onData);
-            sLocal.once("exit", onExit);
-            // Safety timeout
-            setTimeout(() => {
-              cleanup();
-              resolve();
-            }, 8000).unref();
-          });
-      }
-
-      // Send SIGUSR1 to enable debugging
+      // Send SIGUSR1 to request inspector activation.
       kill(pid, 'SIGUSR1');
 
-      // Wait for activation signal from strace (best-effort)
-      await waitForDebuggerLine();
+      // Try to learn the port from strace output (Linux best-effort).
+      let detectedPort = await this.detectInspectorPortViaStrace(pid);
 
-      // If we didn't see the port via strace, poll common inspector ports
-      if (!detectedPort) {
-        const candidates: number[] = opts?.ports?.length
-          ? opts.ports
-          : Array.from(
-            { length: INSPECTOR_PORT_RANGE.end - INSPECTOR_PORT_RANGE.start + 1 },
-            (_, i) => INSPECTOR_PORT_RANGE.start + i,
-          );
-        const deadline = Date.now() + (opts?.discoverTimeoutMs ?? DEFAULTS.DISCOVER_TIMEOUT_MS);
-
-        while (!detectedPort && Date.now() < deadline) {
-          for (const cand of candidates) {
-            const ok = await probeInspector(cand, opts?.probeTimeoutMs ?? DEFAULTS.PROBE_TIMEOUT_MS);
-
-            if (ok) {
-              detectedPort = cand;
-              activation = "poll";
-              break;
-            }
-          }
-          if (!detectedPort) {
-            await new Promise((r) => setTimeout(r, 200));
-          }
-        }
+      if (detectedPort !== undefined) {
+        activation = 'strace';
+      } else {
+        // Fall back to polling well-known inspector ports.
+        detectedPort = await this.pollForInspectorPort(opts);
+        if (detectedPort !== undefined) activation = 'poll';
       }
 
-      // If no port detected, fallback to default inspector port
+      // Whatever happens, attempt the attach with the best port we have (default if unknown).
       const portToUse = detectedPort ?? DEFAULTS.INSPECTOR_PORT;
       const attachResult = await this.attachToProcess({ port: portToUse });
 
-      // Enrich success response with activation details
-      try {
-        const parsed = JSON.parse(attachResult.content[0].text);
-        const enriched = {
-          ...parsed,
-          debug: {
-            activation,
-            detectedPort: portToUse,
-            webSocketUrl: this.webSocketUrl,
-          },
-        };
-
-        return createSuccessResponse(enriched);
-      } catch {
-        return attachResult;
-      }
+      return this.enrichAttachResult(attachResult, activation, portToUse);
     } catch (error) {
       return createErrorResponse(
         'Failed to enable debugger',

@@ -464,6 +464,261 @@ export class NodeJSDebugAdapter extends DebugSession {
     this.sendEvent(new OutputEvent(`Exception: ${params.exceptionDetails.text}\n`, "stderr"));
   }
 
+  // Build a (line|column|condition|logMessage) → previous dapId map so re-sends keep stable ids.
+  private snapshotPreviousDapIds(path: string): Map<string, number> {
+    const previousByKey = new Map<string, number>();
+
+    for (const prev of this.breakpoints.get(path) ?? []) {
+      if (prev.dapId === undefined) continue;
+
+      const key = this.breakpointKey(prev.line, prev.column, prev.condition, prev.logMessage);
+
+      previousByKey.set(key, prev.dapId);
+    }
+
+    return previousByKey;
+  }
+
+  private breakpointKey(line: number, column: number | undefined, condition: string | undefined, logMessage: string | undefined): string {
+    return `${line}|${column ?? 0}|${condition ?? ''}|${logMessage ?? ''}`;
+  }
+
+  // Resolve TS source positions through source maps; for non-TS or when no map, returns input unchanged.
+  private async resolveTargetLocation(
+    path: string,
+    line: number,
+    column: number,
+  ): Promise<{ targetPath: string; targetLine: number; targetColumn: number }> {
+    if (!/\.(ts|tsx|mts|cts)$/.test(path)) {
+      return { targetPath: path, targetLine: line, targetColumn: column };
+    }
+
+    try {
+      const sourceMapResolution = await this.sourceMapResolver.resolveSourceMapPosition(path, line, column);
+
+      if (sourceMapResolution.sourceMapInfo.success) {
+        this.sendEvent(
+          new OutputEvent(`Source map resolved: ${path}:${line} → ${sourceMapResolution.targetFilePath}:${sourceMapResolution.targetLineNumber}\n`, "console"),
+        );
+
+        return {
+          targetPath: sourceMapResolution.targetFilePath,
+          targetLine: sourceMapResolution.targetLineNumber,
+          targetColumn: sourceMapResolution.targetColumnNumber,
+        };
+      }
+    } catch (error) {
+      this.sendEvent(
+        new OutputEvent(
+          `Source map resolution failed for ${path}:${line}: ${
+            error instanceof Error ? error.message : String(error)
+          }\n`,
+          "console",
+        ),
+      );
+    }
+
+    return { targetPath: path, targetLine: line, targetColumn: column };
+  }
+
+  // Attempt scriptId-based placement (most reliable when scripts are loaded).
+  // Returns updated location info plus the cdpResult, or null if placement failed.
+  private async placeBreakpointByScriptId(
+    targetPath: string,
+    targetLine: number,
+    targetColumn: number,
+    breakpointCondition: string | undefined,
+  ): Promise<{ cdpResult: Protocol.Debugger.SetBreakpointByUrlResponse; line: number; column: number } | null> {
+    if (!this.cdpTransport) return null;
+
+    const scriptId = await this.getScriptIdForPath(targetPath, 2000);
+
+    this.sendEvent(
+      new OutputEvent(`Breakpoint target ${targetPath} → scriptId=${scriptId ?? "not-found"}\n`, "console"),
+    );
+
+    if (!scriptId) return null;
+
+    try {
+      const baseLine0 = Math.max(0, targetLine - 1);
+      const baseCol0 = Math.max(0, targetColumn - 1);
+      const tryRange = async (startDelta: number, endDelta: number) => {
+        const start: Protocol.Debugger.Location = {
+          scriptId,
+          lineNumber: Math.max(0, baseLine0 + startDelta),
+          columnNumber: 0,
+        };
+        const end: Protocol.Debugger.Location = {
+          scriptId,
+          lineNumber: Math.max(start.lineNumber, baseLine0 + endDelta),
+          columnNumber: 200,
+        };
+        const possible =
+          await this.cdpTransport!.sendCommand<Protocol.Debugger.GetPossibleBreakpointsResponse>(
+            "Debugger.getPossibleBreakpoints",
+            { start, end, restrictToFunction: false },
+          );
+        const locs = possible.locations;
+
+        if (!locs.length) return undefined;
+
+        const after = locs.filter(
+          (l) => l.lineNumber > baseLine0 || (l.lineNumber === baseLine0 && (l.columnNumber ?? 0) >= baseCol0),
+        );
+
+        if (after.length) return after[0];
+
+        return locs.sort(
+          (a, b) => Math.abs(a.lineNumber - baseLine0) - Math.abs(b.lineNumber - baseLine0),
+        )[0];
+      };
+      let chosen = await tryRange(0, 10);
+
+      chosen ??= await tryRange(-2, 20);
+      chosen ??= await tryRange(-10, 50);
+
+      if (!chosen) return null;
+
+      this.sendEvent(
+        new OutputEvent(
+          `getPossibleBreakpoints picked ${targetPath}:${chosen.lineNumber + 1}:${
+            (chosen.columnNumber ?? 0) + 1
+          }\n`,
+          "console",
+        ),
+      );
+
+      const setResp = await this.cdpTransport.sendCommand<Protocol.Debugger.SetBreakpointResponse>(
+        "Debugger.setBreakpoint",
+        { location: chosen, condition: breakpointCondition },
+      );
+
+      return {
+        cdpResult: {
+          breakpointId: setResp.breakpointId,
+          locations: [setResp.actualLocation],
+        },
+        line: setResp.actualLocation.lineNumber + 1,
+        column: (setResp.actualLocation.columnNumber ?? chosen.columnNumber ?? 0) + 1,
+      };
+    } catch {
+      // Caller will fall through to URL-based placement.
+      return null;
+    }
+  }
+
+  // Fallback path: setBreakpointByUrl (exact url first, then urlRegex).
+  private async placeBreakpointByUrl(
+    targetPath: string,
+    targetLine: number,
+    targetColumn: number,
+    breakpointCondition: string | undefined,
+  ): Promise<Protocol.Debugger.SetBreakpointByUrlResponse> {
+    if (!this.cdpTransport) {
+      throw new Error('CDP transport not available');
+    }
+
+    const fileUrl = `file://${targetPath}`;
+
+    try {
+      const cdpResult = await this.cdpTransport.sendCommand<Protocol.Debugger.SetBreakpointByUrlResponse>(
+        "Debugger.setBreakpointByUrl",
+        {
+          url: fileUrl,
+          lineNumber: Math.max(0, targetLine - 1),
+          condition: breakpointCondition,
+        },
+      );
+
+      this.sendEvent(
+        new OutputEvent(
+          `setBreakpointByUrl at ${fileUrl}:${targetLine}:${targetColumn} (exact url)\n`,
+          "console",
+        ),
+      );
+
+      return cdpResult;
+    } catch {
+      const escapedPath = targetPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const cdpResult = await this.cdpTransport.sendCommand<Protocol.Debugger.SetBreakpointByUrlResponse>(
+        "Debugger.setBreakpointByUrl",
+        {
+          lineNumber: Math.max(0, targetLine - 1),
+          urlRegex: `file:.*${escapedPath}$`,
+          condition: breakpointCondition,
+        },
+      );
+
+      this.sendEvent(
+        new OutputEvent(
+          `setBreakpointByUrl at regex /${escapedPath}$/ line=${targetLine} col=${targetColumn}\n`,
+          "console",
+        ),
+      );
+
+      return cdpResult;
+    }
+  }
+
+  // Place a single breakpoint, trying scriptId then url paths. Returns null on no transport.
+  private async placeSingleBreakpoint(
+    path: string,
+    line: number,
+    column: number,
+    sourceBreakpoint: DebugProtocol.SourceBreakpoint,
+  ): Promise<Protocol.Debugger.SetBreakpointByUrlResponse | null> {
+    if (!this.cdpTransport) return null;
+
+    const { targetPath, targetLine, targetColumn } = await this.resolveTargetLocation(path, line, column);
+    // For logpoints, swap the user condition for the synthetic logpoint expression.
+    const breakpointCondition = sourceBreakpoint.logMessage
+      ? this.createLogpointExpression(sourceBreakpoint.logMessage)
+      : sourceBreakpoint.condition;
+    const scriptIdResult = await this.placeBreakpointByScriptId(targetPath, targetLine, targetColumn, breakpointCondition);
+
+    if (scriptIdResult) {
+      return scriptIdResult.cdpResult;
+    }
+
+    return this.placeBreakpointByUrl(targetPath, targetLine, targetColumn, breakpointCondition);
+  }
+
+  // Build the runtime + DAP breakpoint pair, reusing prior dapId when signature matches.
+  private buildBreakpointEntry(
+    path: string,
+    line: number,
+    column: number,
+    sourceBreakpoint: DebugProtocol.SourceBreakpoint,
+    cdpResult: Protocol.Debugger.SetBreakpointByUrlResponse | null,
+    previousByKey: Map<string, number>,
+  ): { runtimeBp: NodeJSRuntimeBreakpoint; actualBp: Breakpoint } {
+    const key = this.breakpointKey(line, column, sourceBreakpoint.condition, sourceBreakpoint.logMessage);
+    const dapId = previousByKey.get(key) ?? this.nextBreakpointId++;
+
+    previousByKey.delete(key);
+
+    const breakpointId = cdpResult?.breakpointId ?? `bp_${this.nextBreakpointId++}`;
+    const verified = cdpResult !== null;
+    const runtimeBp: NodeJSRuntimeBreakpoint = {
+      id: breakpointId,
+      dapId,
+      line,
+      column,
+      verified,
+      condition: sourceBreakpoint.condition,
+      logMessage: sourceBreakpoint.logMessage,
+    };
+    const actualBp = new Breakpoint(verified, line, column);
+
+    (actualBp as unknown as DebugProtocol.Breakpoint).source = {
+      name: path.split("/").pop(),
+      path,
+    };
+    (actualBp as unknown as DebugProtocol.Breakpoint).id = dapId;
+
+    return { runtimeBp, actualBp };
+  }
+
   protected async setBreakPointsRequest(
     response: DebugProtocol.SetBreakpointsResponse,
     args: DebugProtocol.SetBreakpointsArguments,
@@ -483,22 +738,13 @@ export class NodeJSDebugAdapter extends DebugSession {
       // expect ids to stay stable for breakpoints whose location/condition/logMessage
       // hasn't changed. Snapshot the previous entries by signature so the loop below
       // can reuse the existing dapId when it sees the same breakpoint coming back.
-      const previousByKey = new Map<string, number>();
-
-      for (const prev of this.breakpoints.get(path) ?? []) {
-        if (prev.dapId === undefined) continue;
-
-        const key = `${prev.line}|${prev.column ?? 0}|${prev.condition ?? ''}|${prev.logMessage ?? ''}`;
-
-        previousByKey.set(key, prev.dapId);
-      }
+      const previousByKey = this.snapshotPreviousDapIds(path);
 
       // Clear previous breakpoints for this file via CDP
       await this.clearCDPBreakpoints(path);
 
       const actualBreakpoints: Breakpoint[] = [];
       const runtimeBreakpoints: NodeJSRuntimeBreakpoint[] = [];
-      // Set new breakpoints via CDP
       const total = Math.max(clientLines.length, sourceBreakpoints.length);
 
       for (let i = 0; i < total; i++) {
@@ -506,239 +752,30 @@ export class NodeJSDebugAdapter extends DebugSession {
         const line = clientLines[i] ?? sourceBreakpoint.line;
         // Use 1-based default column to satisfy source map resolution (resolver rejects 0)
         const column = sourceBreakpoint.column ?? 1;
+        let cdpResult: Protocol.Debugger.SetBreakpointByUrlResponse | null = null;
 
         try {
-          let cdpResult: Protocol.Debugger.SetBreakpointByUrlResponse | null = null;
-          // Resolve source map position if needed (for .ts files)
-          let targetPath = path;
-          let targetLine = line;
-          let targetColumn = column;
-
-          if (this.cdpTransport) {
-            if (/\.(ts|tsx|mts|cts)$/.test(path)) {
-              try {
-                const sourceMapResolution = await this.sourceMapResolver.resolveSourceMapPosition(path, line, column);
-
-                if (sourceMapResolution.sourceMapInfo.success) {
-                  targetPath = sourceMapResolution.targetFilePath;
-                  targetLine = sourceMapResolution.targetLineNumber;
-                  targetColumn = sourceMapResolution.targetColumnNumber;
-
-                  this.sendEvent(
-                    new OutputEvent(`Source map resolved: ${path}:${line} → ${targetPath}:${targetLine}\n`, "console"),
-                  );
-                }
-              } catch (error) {
-                this.sendEvent(
-                  new OutputEvent(
-                    `Source map resolution failed for ${path}:${line}: ${
-                      error instanceof Error ? error.message : String(error)
-                    }\n`,
-                    "console",
-                  ),
-                );
-              }
-            }
-
-            // Determine the condition for this breakpoint
-            // For logpoints, use the logpoint expression; otherwise use the regular condition
-            let breakpointCondition = sourceBreakpoint.condition;
-
-            if (sourceBreakpoint.logMessage) {
-              breakpointCondition = this.createLogpointExpression(sourceBreakpoint.logMessage);
-            }
-
-            // First try scriptId-based placement for reliability
-            const fileUrl = `file://${targetPath}`;
-            const scriptId = await this.getScriptIdForPath(targetPath, 2000);
-
-            this.sendEvent(
-              new OutputEvent(`Breakpoint target ${targetPath} → scriptId=${scriptId ?? "not-found"}\n`, "console"),
-            );
-
-            if (scriptId) {
-              try {
-                const baseLine0 = Math.max(0, targetLine - 1);
-                const baseCol0 = Math.max(0, targetColumn - 1);
-                const tryRange = async (startDelta: number, endDelta: number) => {
-                  const start: Protocol.Debugger.Location = {
-                    scriptId,
-                    lineNumber: Math.max(0, baseLine0 + startDelta),
-                    columnNumber: 0,
-                  };
-                  const end: Protocol.Debugger.Location = {
-                    scriptId,
-                    lineNumber: Math.max(start.lineNumber, baseLine0 + endDelta),
-                    columnNumber: 200,
-                  };
-                  const possible =
-                    await this.cdpTransport!.sendCommand<Protocol.Debugger.GetPossibleBreakpointsResponse>(
-                      "Debugger.getPossibleBreakpoints",
-                      { start, end, restrictToFunction: false },
-                    );
-                  const locs = possible.locations;
-
-                  if (!locs.length) return undefined;
-
-                  // Prefer first location at or after base position
-                  const after = locs.filter(
-                    (l) => l.lineNumber > baseLine0 || (l.lineNumber === baseLine0 && (l.columnNumber ?? 0) >= baseCol0),
-                  );
-
-                  if (after.length) return after[0];
-
-                  // Else pick the closest by absolute distance in lines
-                  return locs.sort(
-                    (a, b) => Math.abs(a.lineNumber - baseLine0) - Math.abs(b.lineNumber - baseLine0),
-                  )[0];
-                };
-                let chosen = await tryRange(0, 10);
-
-                chosen ??= await tryRange(-2, 20);
-                chosen ??= await tryRange(-10, 50);
-
-                if (chosen) {
-                  this.sendEvent(
-                    new OutputEvent(
-                      `getPossibleBreakpoints picked ${targetPath}:${chosen.lineNumber + 1}:${
-                        (chosen.columnNumber ?? 0) + 1
-                      }\n`,
-                      "console",
-                    ),
-                  );
-
-                  const setResp = await this.cdpTransport.sendCommand<Protocol.Debugger.SetBreakpointResponse>(
-                    "Debugger.setBreakpoint",
-                    { location: chosen, condition: breakpointCondition },
-                  );
-
-                  cdpResult = {
-                    breakpointId: setResp.breakpointId,
-                    locations: [setResp.actualLocation],
-                  };
-                  // Update targetLine/Column for better reporting
-                  targetLine = setResp.actualLocation.lineNumber + 1;
-                  targetColumn = (setResp.actualLocation.columnNumber ?? chosen.columnNumber ?? 0) + 1;
-                }
-              } catch {
-                // fall through to URL-based
-              }
-            }
-
-            if (!cdpResult) {
-              // Try exact URL with mapped generated location
-              try {
-                cdpResult = await this.cdpTransport.sendCommand<Protocol.Debugger.SetBreakpointByUrlResponse>(
-                  "Debugger.setBreakpointByUrl",
-                  {
-                    url: fileUrl,
-                    lineNumber: Math.max(0, targetLine - 1),
-                    condition: breakpointCondition,
-                  },
-                );
-                this.sendEvent(
-                  new OutputEvent(
-                    `setBreakpointByUrl at ${fileUrl}:${targetLine}:${targetColumn} (exact url)\n`,
-                    "console",
-                  ),
-                );
-              } catch {
-                // Fallback to urlRegex
-                const escapedPath = targetPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-                cdpResult = await this.cdpTransport.sendCommand<Protocol.Debugger.SetBreakpointByUrlResponse>(
-                  "Debugger.setBreakpointByUrl",
-                  {
-                    lineNumber: Math.max(0, targetLine - 1),
-                    urlRegex: `file:.*${escapedPath}$`,
-                    condition: breakpointCondition,
-                  },
-                );
-                this.sendEvent(
-                  new OutputEvent(
-                    `setBreakpointByUrl at regex /${escapedPath}$/ line=${targetLine} col=${targetColumn}\n`,
-                    "console",
-                  ),
-                );
-              }
-            }
-          }
-
-          const breakpointId = cdpResult?.breakpointId ?? `bp_${this.nextBreakpointId++}`;
-          const verified = cdpResult !== null;
-          const key = `${line}|${column}|${sourceBreakpoint.condition ?? ''}|${sourceBreakpoint.logMessage ?? ''}`;
-          const dapId = previousByKey.get(key) ?? this.nextBreakpointId++;
-
-          previousByKey.delete(key);
-
-          const runtimeBp: NodeJSRuntimeBreakpoint = {
-            id: breakpointId,
-            dapId,
-            line,
-            column,
-            verified,
-            condition: sourceBreakpoint.condition,
-            logMessage: sourceBreakpoint.logMessage,
-          };
-
-          runtimeBreakpoints.push(runtimeBp);
-
-          // Report requested location back to client (tests expect requested line/col)
-          const actualBp = new Breakpoint(verified, line, column);
-
-          // Attach source info so tests can assert source.path
-          (actualBp as unknown as DebugProtocol.Breakpoint).source = {
-            name: path.split("/").pop(),
-            path,
-          };
-          // Provide numeric id for DAP response consumers
-          (actualBp as unknown as DebugProtocol.Breakpoint).id = dapId;
-
-          actualBreakpoints.push(actualBp);
-
-          // Send notification if this was a logpoint
-          if (sourceBreakpoint.logMessage) {
-            this.sendEvent(
-              new OutputEvent(
-                `Logpoint set at ${path}:${line} - Message: "${sourceBreakpoint.logMessage}"\n`,
-                "console",
-              ),
-            );
-          }
+          cdpResult = await this.placeSingleBreakpoint(path, line, column, sourceBreakpoint);
         } catch (error) {
-          // Create unverified breakpoint if CDP fails
-          const key = `${line}|${column}|${sourceBreakpoint.condition ?? ''}|${sourceBreakpoint.logMessage ?? ''}`;
-          const dapId = previousByKey.get(key) ?? this.nextBreakpointId++;
-
-          previousByKey.delete(key);
-
-          const runtimeBp: NodeJSRuntimeBreakpoint = {
-            id: `bp_${this.nextBreakpointId++}`,
-            dapId,
-            line,
-            column,
-            verified: false,
-            condition: sourceBreakpoint.condition,
-            logMessage: sourceBreakpoint.logMessage,
-          };
-
-          runtimeBreakpoints.push(runtimeBp);
-
-          const actualBp = new Breakpoint(false, line, column);
-
-          (actualBp as unknown as DebugProtocol.Breakpoint).source = {
-            name: path.split("/").pop(),
-            path,
-          };
-          (actualBp as unknown as DebugProtocol.Breakpoint).id = dapId;
-
-          actualBreakpoints.push(actualBp);
-
           this.sendEvent(
             new OutputEvent(
               `Failed to set breakpoint at ${path}:${line}: ${
                 error instanceof Error ? error.message : String(error)
               }\n`,
+              "console",
+            ),
+          );
+        }
+
+        const { runtimeBp, actualBp } = this.buildBreakpointEntry(path, line, column, sourceBreakpoint, cdpResult, previousByKey);
+
+        runtimeBreakpoints.push(runtimeBp);
+        actualBreakpoints.push(actualBp);
+
+        if (cdpResult && sourceBreakpoint.logMessage) {
+          this.sendEvent(
+            new OutputEvent(
+              `Logpoint set at ${path}:${line} - Message: "${sourceBreakpoint.logMessage}"\n`,
               "console",
             ),
           );

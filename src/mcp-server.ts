@@ -82,6 +82,31 @@ export class NodeDebuggerMCPServer {
     };
   }
 
+  // Boilerplate around every gated tool: check availability, run work, normalise content types.
+  private async runGatedTool(
+    toolName: string,
+    work: () => Promise<{ content?: Array<{ type: string; text: string; [key: string]: unknown }> }>,
+  ) {
+    const availability = this.validateToolAvailability(toolName);
+
+    if (!availability.isEnabled) {
+      return this.createToolUnavailableError(toolName, availability.reason!);
+    }
+
+    const result = await work();
+
+    return this.fixContentTypes(result);
+  }
+
+  // For tools that are always available (no gating). Just normalises content types.
+  private async runOpenTool(
+    work: () => Promise<{ content?: Array<{ type: string; text: string; [key: string]: unknown }> }>,
+  ) {
+    const result = await work();
+
+    return this.fixContentTypes(result);
+  }
+
   // Method to send breakpoint notifications to MCP client
   private sendBreakpointNotification(type: 'breakpoint_set' | 'breakpoint_removed' | 'logpoint_set', data: Record<string, unknown>): void {
     this.server.server.sendLoggingMessage({
@@ -233,34 +258,24 @@ export class NodeDebuggerMCPServer {
         },
       },
       async ({ url, port = 9229, address = "localhost", processId, discoverTimeoutMs = 8000, probeTimeoutMs = 400, ports }) => {
-        const availability = this.validateToolAvailability("attach");
+        return this.runGatedTool("attach", async () => {
+          if (url) {
+            return this.dapClient.connectUrl(url);
+          }
+          if (processId) {
+            // For PID-based enablement, Node will choose the inspector port; auto-discover it with configured timeouts.
+            return this.dapClient.enableDebuggerPid(processId, {
+              discoverTimeoutMs,
+              probeTimeoutMs,
+              ports,
+            });
+          }
+          if (port === 9229 && address === "localhost") {
+            return this.dapClient.connectDefault();
+          }
 
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("attach", availability.reason!);
-        }
-
-        let result;
-
-        if (url) {
-          result = await this.dapClient.connectUrl(url);
-        } else if (processId) {
-          // For PID-based enablement, Node will choose the inspector port; auto-discover it with configured timeouts.
-          result = await this.dapClient.enableDebuggerPid(processId, {
-            discoverTimeoutMs,
-            probeTimeoutMs,
-            ports,
-          });
-        } else if (port === 9229 && address === "localhost") {
-          result = await this.dapClient.connectDefault();
-        } else {
-          const url = `ws://${address}:${port}`;
-
-          result = await this.dapClient.connectUrl(url);
-        }
-
-        const processedResult = this.fixContentTypes(result);
-
-        return processedResult;
+          return this.dapClient.connectUrl(`ws://${address}:${port}`);
+        });
       },
     );
 
@@ -274,18 +289,7 @@ export class NodeDebuggerMCPServer {
         description: "Disconnect from current debugger session",
         inputSchema: {},
       },
-      async () => {
-        const availability = this.validateToolAvailability("disconnect");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("disconnect", availability.reason!);
-        }
-
-        const result = await this.disconnect();
-        const processedResult = this.fixContentTypes(result);
-
-        return processedResult;
-      },
+      async () => this.runGatedTool("disconnect", () => this.disconnect()),
     );
 
     this.tools.set("disconnect", { tool: disconnectTool, category: 'disconnection' });
@@ -314,36 +318,29 @@ export class NodeDebuggerMCPServer {
         },
       },
       async ({ source, breakpoints, lines }) => {
-        const availability = this.validateToolAvailability("setBreakpoints");
+        return this.runGatedTool("setBreakpoints", async () => {
+          const result = await this.debuggerManager.setBreakpoints(source, breakpoints, lines);
 
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("setBreakpoints", availability.reason!);
-        }
+          // Send notification about breakpoints creation
+          try {
+            const parsedResult = JSON.parse(result.content[0].text);
 
-        const result = await this.debuggerManager.setBreakpoints(source, breakpoints, lines);
-
-        // Send notification about breakpoints creation
-        // Extract breakpoints from the response
-        try {
-          const parsedResult = JSON.parse(result.content[0].text);
-
-          if (parsedResult.success && parsedResult.data?.breakpoints) {
+            if (parsedResult.success && parsedResult.data?.breakpoints) {
+              this.sendBreakpointNotification('breakpoint_set', {
+                source: source.path,
+                breakpoints: parsedResult.data.breakpoints,
+              });
+            }
+          } catch {
+            // If parsing fails, still send notification without details
             this.sendBreakpointNotification('breakpoint_set', {
               source: source.path,
-              breakpoints: parsedResult.data.breakpoints,
+              count: breakpoints?.length ?? lines?.length ?? 0,
             });
           }
-        } catch {
-          // If parsing fails, still send notification without details
-          this.sendBreakpointNotification('breakpoint_set', {
-            source: source.path,
-            count: breakpoints?.length ?? lines?.length ?? 0,
-          });
-        }
 
-        const processedResult = this.fixContentTypes(result);
-
-        return processedResult;
+          return result;
+        });
       },
     );
 
@@ -359,22 +356,13 @@ export class NodeDebuggerMCPServer {
         },
       },
       async ({ breakpointId }) => {
-        const availability = this.validateToolAvailability("removeBreakpoint");
+        return this.runGatedTool("removeBreakpoint", async () => {
+          const result = await this.debuggerManager.removeBreakpoint(breakpointId);
 
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("removeBreakpoint", availability.reason!);
-        }
+          this.sendBreakpointNotification('breakpoint_removed', { breakpointId });
 
-        const result = await this.debuggerManager.removeBreakpoint(breakpointId);
-
-        // Send notification about breakpoint removal
-        this.sendBreakpointNotification('breakpoint_removed', {
-          breakpointId,
+          return result;
         });
-
-        const processedResult = this.fixContentTypes(result);
-
-        return processedResult;
       },
     );
 
@@ -387,18 +375,7 @@ export class NodeDebuggerMCPServer {
         description: "Get all active breakpoints and logpoints with source code context",
         inputSchema: {},
       },
-      async () => {
-        const availability = this.validateToolAvailability("getBreakpoints");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("getBreakpoints", availability.reason!);
-        }
-
-        const breakpointsData = await this.debuggerManager.getBreakpoints();
-        const processedResult = this.fixContentTypes(breakpointsData);
-
-        return processedResult;
-      },
+      async () => this.runGatedTool("getBreakpoints", () => this.debuggerManager.getBreakpoints()),
     );
 
     this.tools.set("getBreakpoints", { tool: getBreakpointsTool, category: 'debugging' });
@@ -413,18 +390,7 @@ export class NodeDebuggerMCPServer {
           threadId: idSchema.optional().describe("Thread ID to continue (optional)"),
         },
       },
-      async ({ threadId }) => {
-        const availability = this.validateToolAvailability("continue");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("continue", availability.reason!);
-        }
-
-        const continueResult = await this.debuggerManager.continue(threadId);
-        const processedResult = this.fixContentTypes(continueResult);
-
-        return processedResult;
-      },
+      async ({ threadId }) => this.runGatedTool("continue", () => this.debuggerManager.continue(threadId)),
     );
 
     this.tools.set("continue", { tool: continueTool, category: 'debugging' });
@@ -436,18 +402,7 @@ export class NodeDebuggerMCPServer {
         description: "Pause execution",
         inputSchema: {},
       },
-      async () => {
-        const availability = this.validateToolAvailability("pause");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("pause", availability.reason!);
-        }
-
-        const pauseResult = await this.debuggerManager.pause();
-        const processedResult = this.fixContentTypes(pauseResult);
-
-        return processedResult;
-      },
+      async () => this.runGatedTool("pause", () => this.debuggerManager.pause()),
     );
 
     this.tools.set("pause", { tool: pauseTool, category: 'debugging' });
@@ -461,18 +416,7 @@ export class NodeDebuggerMCPServer {
           threadId: idSchema.optional().describe("Thread ID to step (optional)"),
         },
       },
-      async ({ threadId }) => {
-        const availability = this.validateToolAvailability("next");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("next", availability.reason!);
-        }
-
-        const stepResult = await this.debuggerManager.next(threadId);
-        const processedResult = this.fixContentTypes(stepResult);
-
-        return processedResult;
-      },
+      async ({ threadId }) => this.runGatedTool("next", () => this.debuggerManager.next(threadId)),
     );
 
     this.tools.set("next", { tool: nextTool, category: 'debugging' });
@@ -486,18 +430,7 @@ export class NodeDebuggerMCPServer {
           threadId: idSchema.optional().describe("Thread ID to step (optional)"),
         },
       },
-      async ({ threadId }) => {
-        const availability = this.validateToolAvailability("stepIn");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("stepIn", availability.reason!);
-        }
-
-        const stepInResult = await this.debuggerManager.stepIn(threadId);
-        const processedResult = this.fixContentTypes(stepInResult);
-
-        return processedResult;
-      },
+      async ({ threadId }) => this.runGatedTool("stepIn", () => this.debuggerManager.stepIn(threadId)),
     );
 
     this.tools.set("stepIn", { tool: stepInTool, category: 'debugging' });
@@ -511,18 +444,7 @@ export class NodeDebuggerMCPServer {
           threadId: idSchema.optional().describe("Thread ID to step (optional)"),
         },
       },
-      async ({ threadId }) => {
-        const availability = this.validateToolAvailability("stepOut");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("stepOut", availability.reason!);
-        }
-
-        const stepOutResult = await this.debuggerManager.stepOut(threadId);
-        const processedResult = this.fixContentTypes(stepOutResult);
-
-        return processedResult;
-      },
+      async ({ threadId }) => this.runGatedTool("stepOut", () => this.debuggerManager.stepOut(threadId)),
     );
 
     this.tools.set("stepOut", { tool: stepOutTool, category: 'debugging' });
@@ -545,17 +467,9 @@ export class NodeDebuggerMCPServer {
         },
       },
       async ({ expression, frameId, maxLength, maxDepth, maxArrayItems, maxObjectKeys, summary }) => {
-        const availability = this.validateToolAvailability("evaluate");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("evaluate", availability.reason!);
-        }
-
         const options = { maxLength, maxDepth, maxArrayItems, maxObjectKeys, summary };
-        const evaluationResult = await this.debuggerManager.evaluate(expression, frameId, options);
-        const processedResult = this.fixContentTypes(evaluationResult);
 
-        return processedResult;
+        return this.runGatedTool("evaluate", () => this.debuggerManager.evaluate(expression, frameId, options));
       },
     );
 
@@ -578,17 +492,9 @@ export class NodeDebuggerMCPServer {
         },
       },
       async ({ threadId, startFrame, levels, maxLength, maxDepth, maxArrayItems, maxObjectKeys, summary }) => {
-        const availability = this.validateToolAvailability("stackTrace");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("stackTrace", availability.reason!);
-        }
-
         const options = { maxLength, maxDepth, maxArrayItems, maxObjectKeys, summary };
-        const stackTraceResult = await this.debuggerManager.stackTrace(threadId, startFrame, levels, options);
-        const processedResult = this.fixContentTypes(stackTraceResult);
 
-        return processedResult;
+        return this.runGatedTool("stackTrace", () => this.debuggerManager.stackTrace(threadId, startFrame, levels, options));
       },
     );
 
@@ -612,17 +518,9 @@ export class NodeDebuggerMCPServer {
         },
       },
       async ({ variablesReference, filter, start, count, maxLength, maxDepth, maxArrayItems, maxObjectKeys, summary }) => {
-        const availability = this.validateToolAvailability("variables");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("variables", availability.reason!);
-        }
-
         const options = { maxLength, maxDepth, maxArrayItems, maxObjectKeys, summary };
-        const variablesResult = await this.debuggerManager.variables(variablesReference, filter, start, count, options);
-        const processedResult = this.fixContentTypes(variablesResult);
 
-        return processedResult;
+        return this.runGatedTool("variables", () => this.debuggerManager.variables(variablesReference, filter, start, count, options));
       },
     );
 
@@ -635,12 +533,7 @@ export class NodeDebuggerMCPServer {
         description: "Get all captured logpoint hits from console API calls",
         inputSchema: {},
       },
-      async () => {
-        const logpointHits = await this.debuggerManager.getLogpointHits();
-        const processedResult = this.fixContentTypes(logpointHits);
-
-        return processedResult;
-      },
+      async () => this.runOpenTool(() => this.debuggerManager.getLogpointHits()),
     );
 
     this.tools.set("getLogpointHits", { tool: getLogpointHitsTool, category: 'data' });
@@ -652,12 +545,7 @@ export class NodeDebuggerMCPServer {
         description: "Clear all captured logpoint hits from memory",
         inputSchema: {},
       },
-      async () => {
-        const clearResult = await this.debuggerManager.clearLogpointHits();
-        const processedResult = this.fixContentTypes(clearResult);
-
-        return processedResult;
-      },
+      async () => this.runOpenTool(() => this.debuggerManager.clearLogpointHits()),
     );
 
     this.tools.set("clearLogpointHits", { tool: clearLogpointHitsTool, category: 'data' });
@@ -670,12 +558,7 @@ export class NodeDebuggerMCPServer {
         description: "Get all captured debugger pause/resume events",
         inputSchema: {},
       },
-      async () => {
-        const debuggerEvents = await this.debuggerManager.getDebuggerEvents();
-        const processedResult = this.fixContentTypes(debuggerEvents);
-
-        return processedResult;
-      },
+      async () => this.runOpenTool(() => this.debuggerManager.getDebuggerEvents()),
     );
 
     this.tools.set("getDebuggerEvents", { tool: getDebuggerEventsTool, category: 'data' });
@@ -687,12 +570,7 @@ export class NodeDebuggerMCPServer {
         description: "Clear all captured debugger events from memory",
         inputSchema: {},
       },
-      async () => {
-        const clearResult = await this.debuggerManager.clearDebuggerEvents();
-        const processedResult = this.fixContentTypes(clearResult);
-
-        return processedResult;
-      },
+      async () => this.runOpenTool(() => this.debuggerManager.clearDebuggerEvents()),
     );
 
     this.tools.set("clearDebuggerEvents", { tool: clearDebuggerEventsTool, category: 'data' });
@@ -704,13 +582,14 @@ export class NodeDebuggerMCPServer {
         description: "Get current debugger connection state and tool availability",
         inputSchema: {},
       },
-      async () => {
+      async () => this.runOpenTool(async () => {
         const debugInfo = this.toolStateManager.getDebugInfo();
         const connectionInfo = {
           isConnected: this.dapClient.isConnected,
           webSocketUrl: this.dapClient.webSocketUrl,
         };
-        const stateData = {
+
+        return {
           content: [
             {
               type: "text",
@@ -725,10 +604,7 @@ export class NodeDebuggerMCPServer {
             },
           ],
         };
-        const processedResult = this.fixContentTypes(stateData);
-
-        return processedResult;
-      },
+      }),
     );
 
     this.tools.set("getDebuggerState", { tool: getDebuggerStateTool, category: 'inspection' });
@@ -744,12 +620,8 @@ export class NodeDebuggerMCPServer {
           sourceMapPaths: z.array(z.string()).optional().describe("Optional array of .map file paths (defaults to build directory search)"),
         },
       },
-      async ({ generatedLine, generatedColumn, sourceMapPaths }) => {
-        const originalPosition = await this.debuggerManager.resolveOriginalPosition(generatedLine, generatedColumn, sourceMapPaths);
-        const processedResult = this.fixContentTypes(originalPosition);
-
-        return processedResult;
-      },
+      async ({ generatedLine, generatedColumn, sourceMapPaths }) =>
+        this.runOpenTool(() => this.debuggerManager.resolveOriginalPosition(generatedLine, generatedColumn, sourceMapPaths)),
     );
 
     this.tools.set("resolveOriginalPosition", { tool: resolveOriginalPositionTool, category: 'data' });
@@ -767,18 +639,14 @@ export class NodeDebuggerMCPServer {
           originalSourcePath: z.string().optional().describe("Absolute path to the TS source; enables auto-discovery of source maps in project build dirs"),
         },
       },
-      async ({ originalSource, originalLine, originalColumn, sourceMapPaths, originalSourcePath }) => {
-        const generatedPosition = await this.debuggerManager.resolveGeneratedPosition(
+      async ({ originalSource, originalLine, originalColumn, sourceMapPaths, originalSourcePath }) =>
+        this.runOpenTool(() => this.debuggerManager.resolveGeneratedPosition(
           originalSource,
           originalLine,
           originalColumn,
           sourceMapPaths,
           originalSourcePath,
-        );
-        const processedResult = this.fixContentTypes(generatedPosition);
-
-        return processedResult;
-      },
+        )),
     );
 
     this.tools.set("resolveGeneratedPosition", { tool: resolveGeneratedPositionTool, category: 'data' });
@@ -797,18 +665,8 @@ export class NodeDebuggerMCPServer {
           env: z.record(z.string(), z.string()).optional().describe("Environment variables"),
         },
       },
-      async ({ program, args, cwd, env }) => {
-        const availability = this.validateToolAvailability("launch");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("launch", availability.reason!);
-        }
-
-        const launchResult = await this.debuggerManager.launch({ program, args, cwd, env });
-        const processedResult = this.fixContentTypes(launchResult);
-
-        return processedResult;
-      },
+      async ({ program, args, cwd, env }) =>
+        this.runGatedTool("launch", () => this.debuggerManager.launch({ program, args, cwd, env })),
     );
 
     this.tools.set("launch", { tool: launchTool, category: 'connection' });
@@ -820,18 +678,7 @@ export class NodeDebuggerMCPServer {
         description: "Get information about all threads (DAP standard)",
         inputSchema: {},
       },
-      async () => {
-        const availability = this.validateToolAvailability("threads");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("threads", availability.reason!);
-        }
-
-        const threadsResult = await this.debuggerManager.threads();
-        const processedResult = this.fixContentTypes(threadsResult);
-
-        return processedResult;
-      },
+      async () => this.runGatedTool("threads", () => this.debuggerManager.threads()),
     );
 
     this.tools.set("threads", { tool: threadsTool, category: 'inspection' });
@@ -845,18 +692,7 @@ export class NodeDebuggerMCPServer {
           frameId: z.number().int().min(0).describe("Stack frame ID to get scopes for"),
         },
       },
-      async ({ frameId }) => {
-        const availability = this.validateToolAvailability("scopes");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("scopes", availability.reason!);
-        }
-
-        const scopesResult = await this.debuggerManager.scopes(frameId);
-        const processedResult = this.fixContentTypes(scopesResult);
-
-        return processedResult;
-      },
+      async ({ frameId }) => this.runGatedTool("scopes", () => this.debuggerManager.scopes(frameId)),
     );
 
     this.tools.set("scopes", { tool: scopesTool, category: 'inspection' });
@@ -872,18 +708,8 @@ export class NodeDebuggerMCPServer {
           value: z.string().describe("New value for the variable"),
         },
       },
-      async ({ variablesReference, name, value }) => {
-        const availability = this.validateToolAvailability("setVariable");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("setVariable", availability.reason!);
-        }
-
-        const setVariableResult = await this.debuggerManager.setVariable(variablesReference, name, value);
-        const processedResult = this.fixContentTypes(setVariableResult);
-
-        return processedResult;
-      },
+      async ({ variablesReference, name, value }) =>
+        this.runGatedTool("setVariable", () => this.debuggerManager.setVariable(variablesReference, name, value)),
     );
 
     this.tools.set("setVariable", { tool: setVariableTool, category: 'inspection' });
@@ -895,18 +721,7 @@ export class NodeDebuggerMCPServer {
         description: "Get all loaded source files (DAP standard)",
         inputSchema: {},
       },
-      async () => {
-        const availability = this.validateToolAvailability("loadedSources");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("loadedSources", availability.reason!);
-        }
-
-        const loadedSourcesResult = await this.debuggerManager.loadedSources();
-        const processedResult = this.fixContentTypes(loadedSourcesResult);
-
-        return processedResult;
-      },
+      async () => this.runGatedTool("loadedSources", () => this.debuggerManager.loadedSources()),
     );
 
     this.tools.set("loadedSources", { tool: loadedSourcesTool, category: 'inspection' });
@@ -918,18 +733,7 @@ export class NodeDebuggerMCPServer {
         description: "Restart the debugging session (DAP standard)",
         inputSchema: {},
       },
-      async () => {
-        const availability = this.validateToolAvailability("restart");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("restart", availability.reason!);
-        }
-
-        const restartResult = await this.debuggerManager.restart();
-        const processedResult = this.fixContentTypes(restartResult);
-
-        return processedResult;
-      },
+      async () => this.runGatedTool("restart", () => this.debuggerManager.restart()),
     );
 
     this.tools.set("restart", { tool: restartTool, category: 'connection' });
@@ -941,18 +745,7 @@ export class NodeDebuggerMCPServer {
         description: "Terminate the debuggee process (DAP standard)",
         inputSchema: {},
       },
-      async () => {
-        const availability = this.validateToolAvailability("terminate");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("terminate", availability.reason!);
-        }
-
-        const terminateResult = await this.debuggerManager.terminate();
-        const processedResult = this.fixContentTypes(terminateResult);
-
-        return processedResult;
-      },
+      async () => this.runGatedTool("terminate", () => this.debuggerManager.terminate()),
     );
 
     this.tools.set("terminate", { tool: terminateTool, category: 'connection' });
@@ -966,18 +759,7 @@ export class NodeDebuggerMCPServer {
           threadId: idSchema.describe("Thread ID where the exception occurred"),
         },
       },
-      async ({ threadId }) => {
-        const availability = this.validateToolAvailability("exceptionInfo");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("exceptionInfo", availability.reason!);
-        }
-
-        const exceptionInfoResult = await this.debuggerManager.exceptionInfo(threadId);
-        const processedResult = this.fixContentTypes(exceptionInfoResult);
-
-        return processedResult;
-      },
+      async ({ threadId }) => this.runGatedTool("exceptionInfo", () => this.debuggerManager.exceptionInfo(threadId)),
     );
 
     this.tools.set("exceptionInfo", { tool: exceptionInfoTool, category: 'inspection' });
@@ -995,18 +777,8 @@ export class NodeDebuggerMCPServer {
           })).optional().describe("Advanced exception options"),
         },
       },
-      async ({ filters, exceptionOptions }) => {
-        const availability = this.validateToolAvailability("setExceptionBreakpoints");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("setExceptionBreakpoints", availability.reason!);
-        }
-
-        const exceptionBreakpointsResult = await this.debuggerManager.setExceptionBreakpoints(filters, exceptionOptions);
-        const processedResult = this.fixContentTypes(exceptionBreakpointsResult);
-
-        return processedResult;
-      },
+      async ({ filters, exceptionOptions }) =>
+        this.runGatedTool("setExceptionBreakpoints", () => this.debuggerManager.setExceptionBreakpoints(filters, exceptionOptions)),
     );
 
     this.tools.set("setExceptionBreakpoints", { tool: setExceptionBreakpointsTool, category: 'debugging' });
@@ -1026,18 +798,8 @@ export class NodeDebuggerMCPServer {
           endColumn: columnNumberSchema.optional().describe("Optional end column for range"),
         },
       },
-      async ({ source, line, column, endLine, endColumn }) => {
-        const availability = this.validateToolAvailability("breakpointLocations");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("breakpointLocations", availability.reason!);
-        }
-
-        const breakpointLocationsResult = await this.debuggerManager.breakpointLocations(source, line, column, endLine, endColumn);
-        const processedResult = this.fixContentTypes(breakpointLocationsResult);
-
-        return processedResult;
-      },
+      async ({ source, line, column, endLine, endColumn }) =>
+        this.runGatedTool("breakpointLocations", () => this.debuggerManager.breakpointLocations(source, line, column, endLine, endColumn)),
     );
 
     this.tools.set("breakpointLocations", { tool: breakpointLocationsTool, category: 'debugging' });
@@ -1052,18 +814,8 @@ export class NodeDebuggerMCPServer {
           targetId: idSchema.describe("Target ID to jump to"),
         },
       },
-      async ({ threadId, targetId }) => {
-        const availability = this.validateToolAvailability("goto");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("goto", availability.reason!);
-        }
-
-        const gotoResult = await this.debuggerManager.goto(threadId, targetId);
-        const processedResult = this.fixContentTypes(gotoResult);
-
-        return processedResult;
-      },
+      async ({ threadId, targetId }) =>
+        this.runGatedTool("goto", () => this.debuggerManager.goto(threadId, targetId)),
     );
 
     this.tools.set("goto", { tool: gotoTool, category: 'debugging' });
@@ -1077,18 +829,8 @@ export class NodeDebuggerMCPServer {
           frameId: z.number().int().min(0).describe("Stack frame ID to restart from"),
         },
       },
-      async ({ frameId }) => {
-        const availability = this.validateToolAvailability("restartFrame");
-
-        if (!availability.isEnabled) {
-          return this.createToolUnavailableError("restartFrame", availability.reason!);
-        }
-
-        const restartFrameResult = await this.debuggerManager.restartFrame(frameId);
-        const processedResult = this.fixContentTypes(restartFrameResult);
-
-        return processedResult;
-      },
+      async ({ frameId }) =>
+        this.runGatedTool("restartFrame", () => this.debuggerManager.restartFrame(frameId)),
     );
 
     this.tools.set("restartFrame", { tool: restartFrameTool, category: 'debugging' });
