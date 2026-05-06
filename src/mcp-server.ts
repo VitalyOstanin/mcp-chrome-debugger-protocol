@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { DAPClient } from "./dap-client.js";
 import { DAPDebuggerManager } from "./dap-debugger-manager.js";
 import { ToolStateManager } from "./tool-state-manager.js";
+import { DEFAULTS, INSPECTOR_PORT_RANGE } from "./constants.js";
 
 // Shared Zod schemas. MCP/DAP coordinate system is 1-based for both lines and columns.
 const lineNumberSchema = z.number().int().min(1).describe("Line number (1-based)");
@@ -235,16 +236,24 @@ export class NodeDebuggerMCPServer {
         title: "Attach to Node.js Process",
         description: "Attach to Node.js debugger process using DAP",
         inputSchema: {
-          url: z.string().optional().describe("WebSocket URL of the debugger (e.g., ws://127.0.0.1:9229/...)"),
-          port: portSchema.optional().default(9229).describe("Debug port (default: 9229)"),
-          address: z.string().optional().default("localhost").describe("Debug address (default: localhost)"),
+          url: z.string().optional().describe(`WebSocket URL of the debugger (e.g., ws://127.0.0.1:${DEFAULTS.INSPECTOR_PORT}/...)`),
+          port: portSchema.optional().default(DEFAULTS.INSPECTOR_PORT).describe(`Debug port (default: ${DEFAULTS.INSPECTOR_PORT})`),
+          address: z.string().optional().default(DEFAULTS.INSPECTOR_CLIENT_HOST).describe(`Debug address (default: ${DEFAULTS.INSPECTOR_CLIENT_HOST})`),
           processId: z.number().int().min(1).optional().describe("Process ID to attach to"),
-          discoverTimeoutMs: z.number().int().min(0).optional().default(8000).describe("Max time to discover inspector port (ms)"),
-          probeTimeoutMs: z.number().int().min(0).optional().default(400).describe("Timeout for /json/version probe (ms)"),
-          ports: z.array(portSchema).optional().describe("Explicit list of ports to probe when enabling by PID (defaults 9229..9250)"),
+          discoverTimeoutMs: z.number().int().min(0).optional().default(DEFAULTS.DISCOVER_TIMEOUT_MS).describe("Max time to discover inspector port (ms). 0 means do not poll."),
+          probeTimeoutMs: z.number().int().min(0).optional().default(DEFAULTS.PROBE_TIMEOUT_MS).describe("Timeout for /json/version probe (ms)"),
+          ports: z.array(portSchema).optional().describe(`Explicit list of ports to probe when enabling by PID (defaults ${INSPECTOR_PORT_RANGE.start}..${INSPECTOR_PORT_RANGE.end}). Pass [] to disable probing.`),
         },
       },
-      async ({ url, port = 9229, address = "localhost", processId, discoverTimeoutMs = 8000, probeTimeoutMs = 400, ports }) => {
+      async ({
+        url,
+        port = DEFAULTS.INSPECTOR_PORT,
+        address = DEFAULTS.INSPECTOR_CLIENT_HOST,
+        processId,
+        discoverTimeoutMs = DEFAULTS.DISCOVER_TIMEOUT_MS,
+        probeTimeoutMs = DEFAULTS.PROBE_TIMEOUT_MS,
+        ports,
+      }) => {
         return this.runGatedTool("attach", async () => {
           if (url) {
             return this.dapClient.connectUrl(url);
@@ -257,7 +266,7 @@ export class NodeDebuggerMCPServer {
               ports,
             });
           }
-          if (port === 9229 && address === "localhost") {
+          if (port === DEFAULTS.INSPECTOR_PORT && address === DEFAULTS.INSPECTOR_CLIENT_HOST) {
             return this.dapClient.connectDefault();
           }
 

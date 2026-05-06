@@ -22,6 +22,11 @@ import {
   lookupDottedPath,
   renderLogpointMessage,
 } from './logpoint.js';
+import {
+  BREAKPOINT_SEARCH_WINDOWS,
+  DEFAULTS,
+  END_COLUMN_LARGE,
+} from './constants.js';
 
 // The @vscode/debugadapter Breakpoint class does not publish source/id in its
 // public type, but DebugProtocol.Breakpoint requires them. Centralise the cast
@@ -323,8 +328,8 @@ export class NodeJSDebugAdapter extends DebugSession {
   private async doAttach(args: NodeJSAttachRequestArguments): Promise<void> {
     // Create CDP transport and connect to Node.js inspector
     this.cdpTransport = new CDPTransport({
-      host: args.address ?? "localhost",
-      port: args.port ?? 9229,
+      host: args.address ?? DEFAULTS.INSPECTOR_CLIENT_HOST,
+      port: args.port ?? DEFAULTS.INSPECTOR_PORT,
     });
 
     // Set up CDP event handlers
@@ -355,7 +360,7 @@ export class NodeJSDebugAdapter extends DebugSession {
 
     this.sendEvent(
       new OutputEvent(
-        `Attached to Node.js process on ${args.address ?? "localhost"}:${args.port ?? 9229}\n`,
+        `Attached to Node.js process on ${args.address ?? DEFAULTS.INSPECTOR_CLIENT_HOST}:${args.port ?? DEFAULTS.INSPECTOR_PORT}\n`,
         "console",
       ),
     );
@@ -640,7 +645,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         const end: Protocol.Debugger.Location = {
           scriptId,
           lineNumber: Math.max(start.lineNumber, baseLine0 + endDelta),
-          columnNumber: 200,
+          columnNumber: END_COLUMN_LARGE,
         };
         const possible =
           await this.cdpTransport!.sendCommand<Protocol.Debugger.GetPossibleBreakpointsResponse>(
@@ -661,10 +666,14 @@ export class NodeJSDebugAdapter extends DebugSession {
           (a, b) => Math.abs(a.lineNumber - baseLine0) - Math.abs(b.lineNumber - baseLine0),
         )[0];
       };
-      let chosen = await tryRange(0, 10);
+      // Walk the configured fallback windows: each retry widens the search so
+      // a slightly off column still resolves to the nearest valid statement.
+      let chosen: Protocol.Debugger.BreakLocation | undefined;
 
-      chosen ??= await tryRange(-2, 20);
-      chosen ??= await tryRange(-10, 50);
+      for (const [startDelta, endDelta] of BREAKPOINT_SEARCH_WINDOWS) {
+        chosen = await tryRange(startDelta, endDelta);
+        if (chosen) break;
+      }
 
       if (!chosen) return null;
 
@@ -1442,7 +1451,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     const end: Protocol.Debugger.Location = {
       scriptId,
       lineNumber: Math.max(start.lineNumber, args.endLine !== undefined ? args.endLine - 1 : start.lineNumber),
-      columnNumber: args.endColumn !== undefined ? Math.max(0, args.endColumn - 1) : 200,
+      columnNumber: args.endColumn !== undefined ? Math.max(0, args.endColumn - 1) : END_COLUMN_LARGE,
     };
     const possible = await transport.sendCommand<Protocol.Debugger.GetPossibleBreakpointsResponse>(
       'Debugger.getPossibleBreakpoints',

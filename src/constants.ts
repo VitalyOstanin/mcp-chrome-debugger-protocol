@@ -3,7 +3,10 @@
 
 export const DEFAULTS = {
   INSPECTOR_PORT: 9229,
+  // Inspector binds to loopback for security (see attachRequest); the client
+  // host can stay as 'localhost' to retain the user's resolver behaviour.
   INSPECTOR_HOST: '127.0.0.1',
+  INSPECTOR_CLIENT_HOST: 'localhost',
   // Timeout for in-process DAP requests dispatched via DAPClient.sendRequest.
   DAP_REQUEST_TIMEOUT_MS: 10_000,
   // Inspector port discovery loop in DAPClient.enableDebuggerPid.
@@ -12,6 +15,10 @@ export const DEFAULTS = {
   PROBE_TIMEOUT_MS: 400,
   // Wait between strace lines before deciding the inspector did not announce.
   STRACE_TIMEOUT_MS: 8_000,
+  // Sleep between inspector probe rounds in pollForInspectorPort.
+  INSPECTOR_POLL_INTERVAL_MS: 200,
+  // `which`-style command availability probe (isCommandAvailable).
+  COMMAND_AVAILABILITY_TIMEOUT_MS: 1_000,
   // Truncation default for tool responses (manager.truncateResult).
   TRUNCATE_MAX_LENGTH: 20_000,
   // Bounded buffers in DAPClient (logpoint hits, debugger events).
@@ -20,6 +27,21 @@ export const DEFAULTS = {
   SCRIPT_LOOKUP_POLL_INTERVAL_MS: 50,
   SCRIPT_LOOKUP_DEFAULT_TIMEOUT_MS: 1_000,
 } as const;
+
+// Synthetic "wide enough" right edge for Debugger.getPossibleBreakpoints when
+// the caller did not pass an endColumn. CDP requires a column; 200 is large
+// enough for any realistic source line and small enough to avoid CDP issues.
+export const END_COLUMN_LARGE = 200;
+
+// Search windows used by placeBreakpointByScriptId when the requested column
+// has no possible breakpoint location nearby. Each window is [delta, range]:
+// scan from line+delta over `range` lines. Windows widen on each retry so the
+// fallback finds the nearest valid statement without being unbounded.
+export const BREAKPOINT_SEARCH_WINDOWS: ReadonlyArray<readonly [number, number]> = [
+  [0, 10],
+  [-2, 20],
+  [-10, 50],
+];
 
 // Compiled-output directories scanned for .js.map files.
 export const BUILD_DIRS: readonly string[] = ['dist', 'build', 'out', 'lib'];

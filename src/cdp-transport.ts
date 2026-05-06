@@ -2,6 +2,7 @@ import CDP from 'chrome-remote-interface';
 import { EventEmitter } from 'node:events';
 import { setTimeout } from 'node:timers/promises';
 import type ProtocolMappingApi from 'devtools-protocol/types/protocol-mapping';
+import { DEFAULTS } from './constants.js';
 
 export interface CDPTransportOptions {
   host?: string | undefined;
@@ -25,8 +26,8 @@ export class CDPTransport extends EventEmitter {
   constructor(private readonly options: CDPTransportOptions = {}) {
     super();
     this.options = {
-      host: 'localhost',
-      port: 9229,
+      host: DEFAULTS.INSPECTOR_CLIENT_HOST,
+      port: DEFAULTS.INSPECTOR_PORT,
       ...options,
     };
   }

@@ -492,7 +492,7 @@ export class DAPClient extends EventEmitter {
         // Fail-closed: if neither 'spawn' nor 'error' arrived within the window,
         // treat the command as unavailable. The previous default of true caused
         // strace probes to run on systems without strace and waste STRACE_TIMEOUT_MS.
-        setTimeout(() => { finish(false); }, 1000).unref();
+        setTimeout(() => { finish(false); }, DEFAULTS.COMMAND_AVAILABILITY_TIMEOUT_MS).unref();
       } catch {
         resolve(false);
       }
@@ -607,7 +607,7 @@ export class DAPClient extends EventEmitter {
 
       if (hit) return hit.cand;
 
-      await sleep(200);
+      await sleep(DEFAULTS.INSPECTOR_POLL_INTERVAL_MS);
     }
 
     return undefined;
@@ -690,11 +690,11 @@ export class DAPClient extends EventEmitter {
       // or every subscriber will get two notifications per attach.
       await this.sendRequest('attach', {
         port: args.port ?? DEFAULTS.INSPECTOR_PORT,
-        address: args.address ?? 'localhost',
+        address: args.address ?? DEFAULTS.INSPECTOR_CLIENT_HOST,
       });
 
       return createSuccessResponse({
-        message: `Attached to Node.js process on ${args.address ?? 'localhost'}:${args.port ?? DEFAULTS.INSPECTOR_PORT}`,
+        message: `Attached to Node.js process on ${args.address ?? DEFAULTS.INSPECTOR_CLIENT_HOST}:${args.port ?? DEFAULTS.INSPECTOR_PORT}`,
         protocol: 'DAP',
       });
     } catch (error) {
