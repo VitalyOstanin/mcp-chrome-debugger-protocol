@@ -123,12 +123,17 @@ Local workflow for contributors:
 
 ```bash
 npm install
-npm run build              # tsc → dist/
+npm run build              # tsc -> dist/
+npm run typecheck          # tsc -p tsconfig.json (src + tests)
 npm run lint               # eslint .
 npm run lint:fix           # eslint . --fix
 npm test                   # vitest unit tests
+npm run test:coverage      # vitest unit tests with coverage report
 npm run test:integration   # vitest integration tests (real Node debugger)
-npm run dev                # build + run server in dev loop
+npm run test:all           # unit + integration sequentially
+npm run dev                # tsc --watch (incremental compile only)
+npm run dev:server         # build + run MCP server (stdio)
+npm run dev:test           # launch the test-app fixture under --inspect for manual attach
 ```
 
 See [AGENTS.md](AGENTS.md) for detailed contributor rules and project conventions.

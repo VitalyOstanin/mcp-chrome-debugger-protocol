@@ -2,6 +2,18 @@
 
 This directory contains integration tests for the MCP Chrome Debugger Protocol server. The tests are built using [vitest](https://vitest.dev/) and exercise the server end-to-end as a real MCP client driving a real Node.js inspector debuggee.
 
+## Test Pyramid
+
+Three layers, each with its own scope:
+
+| Layer       | Location                            | Runner                                                       | Scope                                                                                                                  |
+|-------------|-------------------------------------|--------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| Unit        | `src/**/*.test.ts`                  | `npm test` -> `vitest.config.ts`                             | Pure functions and small modules. No I/O, no debuggee. `maxWorkers: '10%'`, fast feedback.                             |
+| Integration | `tests/integration/**`              | `npm run test:integration` -> `vitest.integration.config.ts` | Cross-module wiring. In practice every file here is end-to-end (spawns a debuggee fixture and binds inspector ports).  |
+| End-to-end  | `tests/integration/**` (same files) | same as integration                                          | Full MCP client -> server -> Node.js inspector debuggee. `maxWorkers: 1`, `fileParallelism: false`, `testTimeout: 60_000`. |
+
+> Heuristic for new tests: if the test does not need a real debuggee, put it in `src/**/*.test.ts` next to the module it covers. Anything that spawns a Node.js debuggee or binds an inspector port belongs in `tests/integration/`.
+
 ## Test Architecture
 
 ### Test Structure

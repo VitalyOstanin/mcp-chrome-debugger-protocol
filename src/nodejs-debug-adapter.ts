@@ -237,20 +237,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         // Node.js debugger output - DAP handles connection automatically
       });
 
-      // Log source map configuration
-      if (args.sourceMaps !== false) {
-        this.sendEvent(new OutputEvent(`Source maps enabled: ${args.sourceMaps ?? true}\n`, "console"));
-
-        if (args.outFiles && args.outFiles.length > 0) {
-          this.sendEvent(new OutputEvent(`Output files patterns: ${args.outFiles.join(", ")}\n`, "console"));
-        }
-
-        if (args.sourceMapPathOverrides) {
-          this.sendEvent(
-            new OutputEvent(`Source map path overrides: ${JSON.stringify(args.sourceMapPathOverrides)}\n`, "console"),
-          );
-        }
-      }
+      this.logSourceMapConfig(args);
 
       this.nodeProcess.on("exit", () => {
         this.sendEvent(new TerminatedEvent());
@@ -339,19 +326,27 @@ export class NodeJSDebugAdapter extends DebugSession {
       ),
     );
 
-    // Log source map configuration for attach
-    if (args.sourceMaps !== false) {
-      this.sendEvent(new OutputEvent(`Source maps enabled: ${args.sourceMaps ?? true}\n`, "console"));
+    this.logSourceMapConfig(args);
+  }
 
-      if (args.outFiles && args.outFiles.length > 0) {
-        this.sendEvent(new OutputEvent(`Output files patterns: ${args.outFiles.join(", ")}\n`, "console"));
-      }
+  // Emit the same source-map configuration log block from both launchRequest
+  // and doAttach. Skipped when sourceMaps is explicitly disabled.
+  private logSourceMapConfig(args: {
+    sourceMaps?: boolean | undefined;
+    outFiles?: string[] | undefined;
+    sourceMapPathOverrides?: Record<string, string> | undefined;
+  }): void {
+    if (args.sourceMaps === false) return;
+    this.sendEvent(new OutputEvent(`Source maps enabled: ${args.sourceMaps ?? true}\n`, "console"));
 
-      if (args.sourceMapPathOverrides) {
-        this.sendEvent(
-          new OutputEvent(`Source map path overrides: ${JSON.stringify(args.sourceMapPathOverrides)}\n`, "console"),
-        );
-      }
+    if (args.outFiles && args.outFiles.length > 0) {
+      this.sendEvent(new OutputEvent(`Output files patterns: ${args.outFiles.join(", ")}\n`, "console"));
+    }
+
+    if (args.sourceMapPathOverrides) {
+      this.sendEvent(
+        new OutputEvent(`Source map path overrides: ${JSON.stringify(args.sourceMapPathOverrides)}\n`, "console"),
+      );
     }
   }
 
