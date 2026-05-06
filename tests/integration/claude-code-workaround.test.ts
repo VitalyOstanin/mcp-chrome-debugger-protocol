@@ -1,3 +1,4 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 /**
  * Integration test verifying our workaround for Claude Code's ignored tool list change notifications
  * This test demonstrates that setBreakpoints (which handles logpoints) is always visible, solving the original issue

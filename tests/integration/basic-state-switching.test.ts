@@ -1,3 +1,4 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { TestAppManager } from "../utils/test-app-manager";
 import { DebuggerTestHelper } from "../utils/debugger-test-helper";
 import { waitForDebuggerState } from "../utils/wait-helpers";

@@ -1,3 +1,4 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MCPClient } from "../utils/mcp-client";
 import { TestAppManager } from "../utils/test-app-manager";
 import { DebuggerTestHelper } from "../utils/debugger-test-helper";

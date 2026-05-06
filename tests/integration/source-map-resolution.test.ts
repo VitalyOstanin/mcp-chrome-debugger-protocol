@@ -1,3 +1,4 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it, test } from 'vitest';
 import { MCPClient } from '../utils/mcp-client';
 import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';

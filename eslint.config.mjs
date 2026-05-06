@@ -29,20 +29,10 @@ export default [
         setImmediate: 'readonly',
         clearTimeout: 'readonly',
         clearInterval: 'readonly',
-        // Jest globals
-        describe: 'readonly',
-        it: 'readonly',
-        test: 'readonly',
-        expect: 'readonly',
-        beforeEach: 'readonly',
-        afterEach: 'readonly',
         // CommonJS globals for .cjs files
         module: 'readonly',
         require: 'readonly',
         exports: 'readonly',
-        beforeAll: 'readonly',
-        afterAll: 'readonly',
-        jest: 'readonly',
         // TypeScript globals
         NodeJS: 'readonly',
       },
@@ -160,7 +150,6 @@ export default [
       'tests/fixtures/test-app/dist/**', // Compiled test app files
       'tests/fixtures/test-app/src/**', // Test app TS sources not in tsconfig.lint.json
       'tests/fixtures/test-app-js/**', // JavaScript test app
-      'jest.config.integration.js', // Jest config uses CommonJS
     ],
   },
 ];

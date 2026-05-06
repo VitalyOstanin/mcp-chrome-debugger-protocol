@@ -20,10 +20,10 @@
     "mcp:install": "bash scripts/install-claude-code-mcp.sh",
     "mcp:install:dev": "bash scripts/install-claude-code-dev-mcp.sh",
     "mcp:uninstall": "bash scripts/uninstall-claude-code-mcp.sh",
-    "test": "jest --config jest.config.cjs",
-    "test:watch": "jest --config jest.config.cjs --watch",
-    "test:integration": "jest --config jest.config.integration.cjs",
-    "test:integration:watch": "jest --config jest.config.integration.cjs --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:integration:watch": "vitest --config vitest.integration.config.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "prepublishOnly": "npm run build"
@@ -67,17 +67,16 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/chrome-remote-interface": "^0.33.0",
-    "@types/jest": "^30.0.0",
     "@types/node": "^25.6.0",
     "@typescript-eslint/eslint-plugin": "^8.59.2",
     "@typescript-eslint/parser": "^8.59.2",
+    "@vitest/coverage-v8": "^4.1.5",
     "eslint": "^10.3.0",
     "express": "^5.2.1",
     "get-port": "^7.2.0",
-    "jest": "^30.3.0",
-    "ts-jest": "^29.4.9",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.59.2"
+    "typescript-eslint": "^8.59.2",
+    "vitest": "^4.1.5"
   },
   "publishConfig": {
     "access": "public"

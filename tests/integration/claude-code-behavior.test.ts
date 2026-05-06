@@ -1,3 +1,4 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 /**
  * Integration test that reproduces Claude Code behavior with ignored tool list change notifications
  * This test simulates how Claude Code handles MCP tool availability changes

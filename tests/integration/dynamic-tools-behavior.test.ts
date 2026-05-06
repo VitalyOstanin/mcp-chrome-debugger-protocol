@@ -1,3 +1,4 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 /**
  * Test to demonstrate the problematic behavior of dynamic tool enabling/disabling
  * that Claude Code doesn't handle properly due to ignored notifications
