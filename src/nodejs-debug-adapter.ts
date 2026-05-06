@@ -4,6 +4,7 @@ import {
   TerminatedEvent,
   StoppedEvent,
   OutputEvent,
+  ContinuedEvent,
   Thread,
   Breakpoint,
   Event as DAEvent,
@@ -11,6 +12,7 @@ import {
 import type { DebugProtocol } from '@vscode/debugprotocol';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { pathToFileURL } from 'node:url';
 import { CDPTransport, type CDPConnection } from './cdp-transport.js';
 import type { Protocol } from 'devtools-protocol';
 import { SourceMapResolver } from './source-map-resolver.js';
@@ -58,10 +60,24 @@ export class NodeJSDebugAdapter extends DebugSession {
   private nodeProcess: ChildProcess | null = null;
   private readonly breakpoints = new Map<string, NodeJSRuntimeBreakpoint[]>();
   private nextBreakpointId = 1;
+  // Synthetic CDP-style breakpoint id used when the runtime never replied.
+  // Kept independent of nextBreakpointId so the DAP id and the synthetic CDP
+  // id never collide on the same numeric value.
+  private nextSyntheticCdpId = 1;
   private cdpTransport: CDPTransport | null = null;
   private readonly sourceMapResolver = new SourceMapResolver();
   private readonly scriptsByUrl = new Map<string, string>();
+  // Secondary index for the suffix/basename fallback in getScriptIdForPath.
+  // Without it, a Node process loading thousands of modules paid O(N) on every
+  // breakpoint placement that didn't match the exact URL.
+  private readonly scriptsByBasename = new Map<string, Set<string>>();
   private readonly scriptsById = new Map<string, Protocol.Debugger.ScriptParsedEvent>();
+  private readonly verboseDiagnostics = process.env.DAP_VERBOSE === '1' || process.env.DAP_VERBOSE === 'true';
+
+  private diagnostic(message: string): void {
+    if (!this.verboseDiagnostics) return;
+    this.sendEvent(new OutputEvent(message, "console"));
+  }
   private currentCallFrames: Protocol.Debugger.CallFrame[] = [];
   private readonly variableHandles = new Map<number, VariableHandle>();
   private nextVariableHandleId = 1;
@@ -71,7 +87,10 @@ export class NodeJSDebugAdapter extends DebugSession {
 
   private async getScriptIdForPath(targetPath: string, timeoutMs = 1000): Promise<string | undefined> {
     const deadline = Date.now() + timeoutMs;
-    const fileUrl = `file://${targetPath}`;
+    // pathToFileURL handles platform quirks: on Windows it produces 'file:///C:/...'
+    // (RFC 8089-compliant), where naive 'file://' + path prefix produces an
+    // invalid URL that no script lookup will match.
+    const fileUrl = pathToFileURL(targetPath).href;
     const tryGet = () => this.scriptsByUrl.get(fileUrl) ?? this.scriptsByUrl.get(targetPath);
     let scriptId = tryGet();
 
@@ -81,19 +100,44 @@ export class NodeJSDebugAdapter extends DebugSession {
       scriptId = tryGet();
     }
 
-    // As a last resort, try suffix/basename match
+    // As a last resort, try suffix/basename match. Use the precomputed basename
+    // index so we don't iterate over scriptsByUrl (which can hold 1000+ entries
+    // for typical Node processes).
     if (!scriptId) {
       const base = targetPath.split("/").pop();
 
-      for (const [url, sid] of this.scriptsByUrl.entries()) {
-        if (url.endsWith(targetPath) || (base && url.endsWith(`/${  base}`))) {
-          scriptId = sid;
-          break;
+      if (base) {
+        const candidateUrls = this.scriptsByBasename.get(base);
+
+        if (candidateUrls) {
+          for (const url of candidateUrls) {
+            if (url.endsWith(targetPath) || url.endsWith(`/${base}`)) {
+              const sid = this.scriptsByUrl.get(url);
+
+              if (sid) {
+                scriptId = sid;
+                break;
+              }
+            }
+          }
         }
       }
     }
 
     return scriptId;
+  }
+
+  private indexScriptUrl(url: string, scriptId: string): void {
+    this.scriptsByUrl.set(url, scriptId);
+
+    const basename = url.split("/").pop();
+
+    if (!basename) return;
+
+    const bucket = this.scriptsByBasename.get(basename) ?? new Set<string>();
+
+    bucket.add(url);
+    this.scriptsByBasename.set(basename, bucket);
   }
 
   constructor() {
@@ -339,13 +383,13 @@ export class NodeJSDebugAdapter extends DebugSession {
 
         this.scriptsById.set(params.scriptId, params);
         if (params.url) {
-          this.scriptsByUrl.set(params.url, params.scriptId);
+          this.indexScriptUrl(params.url, params.scriptId);
           if (params.url.startsWith("file://")) {
             // Also map plain absolute path
             try {
               const plain = params.url.replace(/^file:\/\//, "");
 
-              this.scriptsByUrl.set(plain, params.scriptId);
+              this.indexScriptUrl(plain, params.scriptId);
             } catch { /* ignore */ }
           }
         }
@@ -371,7 +415,14 @@ export class NodeJSDebugAdapter extends DebugSession {
         this.handleDebuggerPaused(event.params as Protocol.Debugger.PausedEvent);
         break;
       case "Debugger.resumed":
+        // Inform the DAP client that the runtime is no longer paused; otherwise
+        // ToolStateManager.isPaused stays true after `continue` and step* tools
+        // remain available even though the debuggee is running again.
+        this.lastException = null;
+        this.currentCallFrames = [];
+        this.variableHandles.clear();
         this.sendEvent(new OutputEvent("Execution resumed\n", "console"));
+        this.sendEvent(new ContinuedEvent(NodeJSDebugAdapter.THREAD_ID, true));
         break;
       case "Runtime.consoleAPICalled":
         this.handleConsoleAPI(event.params as Protocol.Runtime.ConsoleAPICalledEvent);
@@ -470,7 +521,13 @@ export class NodeJSDebugAdapter extends DebugSession {
   }
 
   private handleException(params: Protocol.Runtime.ExceptionThrownEvent): void {
-    this.lastException = params.exceptionDetails;
+    // Override the CDP-internal exceptionId with our monotonic counter so the
+    // value exposed via exceptionInfo matches what handleDebuggerPaused stores
+    // (predictable 1, 2, 3, ... rather than CDP-internal jumps).
+    this.lastException = {
+      ...params.exceptionDetails,
+      exceptionId: this.nextExceptionId++,
+    };
     this.sendEvent(new OutputEvent(`Exception: ${params.exceptionDetails.text}\n`, "stderr"));
   }
 
@@ -507,9 +564,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       const sourceMapResolution = await this.sourceMapResolver.resolveSourceMapPosition(path, line, column);
 
       if (sourceMapResolution.sourceMapInfo.success) {
-        this.sendEvent(
-          new OutputEvent(`Source map resolved: ${path}:${line} → ${sourceMapResolution.targetFilePath}:${sourceMapResolution.targetLineNumber}\n`, "console"),
-        );
+        this.diagnostic(`Source map resolved: ${path}:${line} → ${sourceMapResolution.targetFilePath}:${sourceMapResolution.targetLineNumber}\n`);
 
         return {
           targetPath: sourceMapResolution.targetFilePath,
@@ -518,13 +573,10 @@ export class NodeJSDebugAdapter extends DebugSession {
         };
       }
     } catch (error) {
-      this.sendEvent(
-        new OutputEvent(
-          `Source map resolution failed for ${path}:${line}: ${
-            error instanceof Error ? error.message : String(error)
-          }\n`,
-          "console",
-        ),
+      this.diagnostic(
+        `Source map resolution failed for ${path}:${line}: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
       );
     }
 
@@ -543,9 +595,7 @@ export class NodeJSDebugAdapter extends DebugSession {
 
     const scriptId = await this.getScriptIdForPath(targetPath, 2000);
 
-    this.sendEvent(
-      new OutputEvent(`Breakpoint target ${targetPath} → scriptId=${scriptId ?? "not-found"}\n`, "console"),
-    );
+    this.diagnostic(`Breakpoint target ${targetPath} → scriptId=${scriptId ?? "not-found"}\n`);
 
     if (!scriptId) return null;
 
@@ -589,13 +639,10 @@ export class NodeJSDebugAdapter extends DebugSession {
 
       if (!chosen) return null;
 
-      this.sendEvent(
-        new OutputEvent(
-          `getPossibleBreakpoints picked ${targetPath}:${chosen.lineNumber + 1}:${
-            (chosen.columnNumber ?? 0) + 1
-          }\n`,
-          "console",
-        ),
+      this.diagnostic(
+        `getPossibleBreakpoints picked ${targetPath}:${chosen.lineNumber + 1}:${
+          (chosen.columnNumber ?? 0) + 1
+        }\n`,
       );
 
       const setResp = await this.cdpTransport.sendCommand<Protocol.Debugger.SetBreakpointResponse>(
@@ -628,7 +675,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       throw new Error('CDP transport not available');
     }
 
-    const fileUrl = `file://${targetPath}`;
+    const fileUrl = pathToFileURL(targetPath).href;
 
     try {
       const cdpResult = await this.cdpTransport.sendCommand<Protocol.Debugger.SetBreakpointByUrlResponse>(
@@ -640,12 +687,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         },
       );
 
-      this.sendEvent(
-        new OutputEvent(
-          `setBreakpointByUrl at ${fileUrl}:${targetLine}:${targetColumn} (exact url)\n`,
-          "console",
-        ),
-      );
+      this.diagnostic(`setBreakpointByUrl at ${fileUrl}:${targetLine}:${targetColumn} (exact url)\n`);
 
       return cdpResult;
     } catch {
@@ -659,12 +701,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         },
       );
 
-      this.sendEvent(
-        new OutputEvent(
-          `setBreakpointByUrl at regex /${escapedPath}$/ line=${targetLine} col=${targetColumn}\n`,
-          "console",
-        ),
-      );
+      this.diagnostic(`setBreakpointByUrl at regex /${escapedPath}$/ line=${targetLine} col=${targetColumn}\n`);
 
       return cdpResult;
     }
@@ -707,7 +744,9 @@ export class NodeJSDebugAdapter extends DebugSession {
 
     previousByKey.delete(key);
 
-    const breakpointId = cdpResult?.breakpointId ?? `bp_${this.nextBreakpointId++}`;
+    // Use a separate counter for synthetic CDP-style ids so they never collide
+    // with the DAP id range (`dapId` consumes nextBreakpointId).
+    const breakpointId = cdpResult?.breakpointId ?? `bp_${this.nextSyntheticCdpId++}`;
     const verified = cdpResult !== null;
     const runtimeBp: NodeJSRuntimeBreakpoint = {
       id: breakpointId,
@@ -769,13 +808,10 @@ export class NodeJSDebugAdapter extends DebugSession {
         try {
           cdpResult = await this.placeSingleBreakpoint(path, line, column, sourceBreakpoint);
         } catch (error) {
-          this.sendEvent(
-            new OutputEvent(
-              `Failed to set breakpoint at ${path}:${line}: ${
-                error instanceof Error ? error.message : String(error)
-              }\n`,
-              "console",
-            ),
+          this.diagnostic(
+            `Failed to set breakpoint at ${path}:${line}: ${
+              error instanceof Error ? error.message : String(error)
+            }\n`,
           );
         }
 
@@ -785,12 +821,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         actualBreakpoints.push(actualBp);
 
         if (cdpResult && sourceBreakpoint.logMessage) {
-          this.sendEvent(
-            new OutputEvent(
-              `Logpoint set at ${path}:${line} - Message: "${sourceBreakpoint.logMessage}"\n`,
-              "console",
-            ),
-          );
+          this.diagnostic(`Logpoint set at ${path}:${line} - Message: "${sourceBreakpoint.logMessage}"\n`);
         }
       }
 
@@ -844,11 +875,8 @@ export class NodeJSDebugAdapter extends DebugSession {
             breakpointId: bp.id,
           });
         } catch (error) {
-          this.sendEvent(
-            new OutputEvent(
-              `Failed to remove breakpoint ${bp.id}: ${error instanceof Error ? error.message : String(error)}\n`,
-              "console",
-            ),
+          this.diagnostic(
+            `Failed to remove breakpoint ${bp.id}: ${error instanceof Error ? error.message : String(error)}\n`,
           );
         }
       }
@@ -874,11 +902,8 @@ export class NodeJSDebugAdapter extends DebugSession {
           });
         }
       } catch (error) {
-        this.sendEvent(
-          new OutputEvent(
-            `Failed to remove breakpoint ${bp.id}: ${error instanceof Error ? error.message : String(error)}\n`,
-            "console",
-          ),
+        this.diagnostic(
+          `Failed to remove breakpoint ${bp.id}: ${error instanceof Error ? error.message : String(error)}\n`,
         );
       }
     }
@@ -898,12 +923,23 @@ export class NodeJSDebugAdapter extends DebugSession {
       // Use IIFE with try/catch to guard ReferenceErrors and other runtime errors
       return `"${key}":(()=>{try{return ${expr}}catch(_){return undefined}})()`;
     }).join(',');
-    // Build message template using __vars values instead of re-evaluating expressions
-    const tpl = logMessage.replace(/`/g, "\\`").replace(/\{([^}]+)\}/g, (_, expr) => {
-      const key = expr.trim().replace(/"/g, '\\"');
+    // Build message template using __vars values instead of re-evaluating expressions.
+    // Escaping order matters:
+    //   1. backslash first  -- so subsequent passes don't double-escape inserted '\'
+    //   2. backtick         -- closes the template literal we wrap below
+    //   3. literal '$'      -- otherwise user-supplied "${...}" would be parsed as a
+    //                          template interpolation by the runtime (the regex below
+    //                          only handles bare "{...}" placeholders)
+    //   4. {expr} placeholders -> "${ ... }" referring to the precomputed __vars map
+    const tpl = logMessage
+      .replace(/\\/g, "\\\\")
+      .replace(/`/g, "\\`")
+      .replace(/\$/g, "\\$")
+      .replace(/\{([^}]+)\}/g, (_, expr: string) => {
+        const key = expr.trim().replace(/"/g, '\\"');
 
-      return `\${typeof __vars["${key}"]==="object"?JSON.stringify(__vars["${key}"]):__vars["${key}"]}`;
-    });
+        return `\${typeof __vars["${key}"]==="object"?JSON.stringify(__vars["${key}"]):__vars["${key}"]}`;
+      });
 
     // Report via Runtime.addBinding binding with rich JSON payload; swallow errors; never pause (return false)
     return `(()=>{try{const __vars={${varsEntries}};typeof __mcpLogPoint==='function'&&__mcpLogPoint(JSON.stringify({message:\`${tpl}\`,vars:__vars,time:Date.now()}))}catch(_){};return false})()`;
@@ -1533,7 +1569,13 @@ export class NodeJSDebugAdapter extends DebugSession {
 
   public goto(args: DebugProtocol.GotoArguments): DebugProtocol.GotoResponse {
     void args;
-    throw new Error('goto is not supported by the Node.js inspector');
+    // The V8 inspector does not expose a primitive jump operation; surface a
+    // descriptive error so the MCP client knows the operation is impossible
+    // here, not just temporarily failing.
+    throw new Error(
+      'goto is not supported by the Node.js inspector: V8 has no primitive jump operation; ' +
+      'use restartFrame to rerun a stack frame or set a breakpoint and continue/pause to navigate',
+    );
   }
 
   public async terminate(): Promise<DebugProtocol.TerminateResponse> {
@@ -1619,12 +1661,6 @@ export class NodeJSDebugAdapter extends DebugSession {
         payload: JSON.stringify(payload),
       }));
     }
-  }
-
-  // Method to simulate breakpoint hit
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  public simulateBreakpointHit(_filePath: string, _line: number): void {
-    this.sendEvent(new StoppedEvent("breakpoint", NodeJSDebugAdapter.THREAD_ID));
   }
 
   // Public wrapper: disconnect

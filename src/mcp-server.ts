@@ -1,4 +1,4 @@
-import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { readFileSync } from "node:fs";
@@ -36,19 +36,11 @@ const packageManifest: PackageManifest = (() => {
   return { name: '@vitalyostanin/mcp-chrome-debugger-protocol', version: '0.0.0' };
 })();
 
-type ToolCategory = 'connection' | 'disconnection' | 'debugging' | 'inspection' | 'data';
-
-interface CategorizedTool {
-  tool: RegisteredTool;
-  category: ToolCategory;
-}
-
 export class NodeDebuggerMCPServer {
   private readonly server: McpServer;
   private readonly dapClient: DAPClient;
   private readonly debuggerManager: DAPDebuggerManager;
   private readonly toolStateManager: ToolStateManager;
-  private readonly tools: Map<string, CategorizedTool> = new Map();
 
 
   private fixContentTypes(result: { content?: Array<{ type: string; text: string; [key: string]: unknown }> }) {
@@ -130,13 +122,9 @@ export class NodeDebuggerMCPServer {
       },
       {
         capabilities: {
-          tools: {
-            listChanged: true,
-          },
+          tools: {},
           logging: {},
         },
-        // Enable debouncing for tool list change notifications
-        debouncedNotificationMethods: ['notifications/tools/list_changed'],
       },
     );
 
@@ -220,10 +208,9 @@ export class NodeDebuggerMCPServer {
   }
 
   private setupStateManagement() {
-    // Listen for state changes and update tool availability
-    this.toolStateManager.onStateChange(() => {
-      this.updateToolsAvailability();
-    });
+    // Tool availability used to be propagated via tools/list_changed, but Claude
+    // Code does not honour that notification (issue anthropics/claude-code#2722).
+    // We register every tool upfront and gate at request time inside runGatedTool.
 
     // Listen for DAP events to update state
     this.dapClient.onStateChange((connected: boolean) => {
@@ -242,7 +229,7 @@ export class NodeDebuggerMCPServer {
 
   private setupConnectionTools() {
     // Connection tools - available when NOT connected
-    const attachTool = this.server.registerTool(
+    this.server.registerTool(
       "attach",
       {
         title: "Attach to Node.js Process",
@@ -279,10 +266,8 @@ export class NodeDebuggerMCPServer {
       },
     );
 
-    this.tools.set("attach", { tool: attachTool, category: 'connection' });
-
     // Disconnection tool - available when connected
-    const disconnectTool = this.server.registerTool(
+    this.server.registerTool(
       "disconnect",
       {
         title: "Disconnect",
@@ -291,15 +276,15 @@ export class NodeDebuggerMCPServer {
       },
       async () => this.runGatedTool("disconnect", () => this.disconnect()),
     );
-
-    this.tools.set("disconnect", { tool: disconnectTool, category: 'disconnection' });
   }
 
   private registerDebuggingTools() {
-    // Register all debugging tools but they will be enabled/disabled based on connection state
+    // Register all debugging tools upfront. Availability is enforced inside
+    // runGatedTool via ToolStateManager; nothing here switches on the
+    // connection state at registration time.
 
     // Breakpoint management tools
-    const setBreakpointsTool = this.server.registerTool(
+    this.server.registerTool(
       "setBreakpoints",
       {
         title: "Set Breakpoints",
@@ -344,9 +329,7 @@ export class NodeDebuggerMCPServer {
       },
     );
 
-    this.tools.set("setBreakpoints", { tool: setBreakpointsTool, category: 'debugging' });
-
-    const removeBreakpointTool = this.server.registerTool(
+    this.server.registerTool(
       "removeBreakpoint",
       {
         title: "Remove Breakpoint",
@@ -359,16 +342,25 @@ export class NodeDebuggerMCPServer {
         return this.runGatedTool("removeBreakpoint", async () => {
           const result = await this.debuggerManager.removeBreakpoint(breakpointId);
 
-          this.sendBreakpointNotification('breakpoint_removed', { breakpointId });
+          // Only emit the notification when the manager confirmed the removal;
+          // otherwise clients would see "breakpoint_removed" for breakpoints
+          // that never existed or that couldn't be cleared at the adapter.
+          try {
+            const parsedResult = JSON.parse(result.content[0]!.text);
+
+            if (parsedResult.success) {
+              this.sendBreakpointNotification('breakpoint_removed', { breakpointId });
+            }
+          } catch {
+            // Malformed payload -- skip the notification rather than lying about state.
+          }
 
           return result;
         });
       },
     );
 
-    this.tools.set("removeBreakpoint", { tool: removeBreakpointTool, category: 'debugging' });
-
-    const getBreakpointsTool = this.server.registerTool(
+    this.server.registerTool(
       "getBreakpoints",
       {
         title: "Get Breakpoints",
@@ -378,10 +370,8 @@ export class NodeDebuggerMCPServer {
       async () => this.runGatedTool("getBreakpoints", () => this.debuggerManager.getBreakpoints()),
     );
 
-    this.tools.set("getBreakpoints", { tool: getBreakpointsTool, category: 'debugging' });
-
     // Execution control tools
-    const continueTool = this.server.registerTool(
+    this.server.registerTool(
       "continue",
       {
         title: "Continue Execution",
@@ -393,9 +383,7 @@ export class NodeDebuggerMCPServer {
       async ({ threadId }) => this.runGatedTool("continue", () => this.debuggerManager.continue(threadId)),
     );
 
-    this.tools.set("continue", { tool: continueTool, category: 'debugging' });
-
-    const pauseTool = this.server.registerTool(
+    this.server.registerTool(
       "pause",
       {
         title: "Pause Execution",
@@ -405,9 +393,7 @@ export class NodeDebuggerMCPServer {
       async () => this.runGatedTool("pause", () => this.debuggerManager.pause()),
     );
 
-    this.tools.set("pause", { tool: pauseTool, category: 'debugging' });
-
-    const nextTool = this.server.registerTool(
+    this.server.registerTool(
       "next",
       {
         title: "Step Over (Next)",
@@ -419,9 +405,7 @@ export class NodeDebuggerMCPServer {
       async ({ threadId }) => this.runGatedTool("next", () => this.debuggerManager.next(threadId)),
     );
 
-    this.tools.set("next", { tool: nextTool, category: 'debugging' });
-
-    const stepInTool = this.server.registerTool(
+    this.server.registerTool(
       "stepIn",
       {
         title: "Step Into",
@@ -433,9 +417,7 @@ export class NodeDebuggerMCPServer {
       async ({ threadId }) => this.runGatedTool("stepIn", () => this.debuggerManager.stepIn(threadId)),
     );
 
-    this.tools.set("stepIn", { tool: stepInTool, category: 'debugging' });
-
-    const stepOutTool = this.server.registerTool(
+    this.server.registerTool(
       "stepOut",
       {
         title: "Step Out",
@@ -447,10 +429,8 @@ export class NodeDebuggerMCPServer {
       async ({ threadId }) => this.runGatedTool("stepOut", () => this.debuggerManager.stepOut(threadId)),
     );
 
-    this.tools.set("stepOut", { tool: stepOutTool, category: 'debugging' });
-
     // Variable inspection tools
-    const evaluateTool = this.server.registerTool(
+    this.server.registerTool(
       "evaluate",
       {
         title: "Evaluate Expression",
@@ -473,9 +453,7 @@ export class NodeDebuggerMCPServer {
       },
     );
 
-    this.tools.set("evaluate", { tool: evaluateTool, category: 'inspection' });
-
-    const stackTraceTool = this.server.registerTool(
+    this.server.registerTool(
       "stackTrace",
       {
         title: "Stack Trace",
@@ -498,9 +476,7 @@ export class NodeDebuggerMCPServer {
       },
     );
 
-    this.tools.set("stackTrace", { tool: stackTraceTool, category: 'inspection' });
-
-    const variablesTool = this.server.registerTool(
+    this.server.registerTool(
       "variables",
       {
         title: "Variables",
@@ -524,9 +500,7 @@ export class NodeDebuggerMCPServer {
       },
     );
 
-    this.tools.set("variables", { tool: variablesTool, category: 'inspection' });
-
-    const getLogpointHitsTool = this.server.registerTool(
+    this.server.registerTool(
       "getLogpointHits",
       {
         title: "Get Logpoint Hits",
@@ -536,9 +510,7 @@ export class NodeDebuggerMCPServer {
       async () => this.runOpenTool(() => this.debuggerManager.getLogpointHits()),
     );
 
-    this.tools.set("getLogpointHits", { tool: getLogpointHitsTool, category: 'data' });
-
-    const clearLogpointHitsTool = this.server.registerTool(
+    this.server.registerTool(
       "clearLogpointHits",
       {
         title: "Clear Logpoint Hits",
@@ -548,10 +520,7 @@ export class NodeDebuggerMCPServer {
       async () => this.runOpenTool(() => this.debuggerManager.clearLogpointHits()),
     );
 
-    this.tools.set("clearLogpointHits", { tool: clearLogpointHitsTool, category: 'data' });
-
-
-    const getDebuggerEventsTool = this.server.registerTool(
+    this.server.registerTool(
       "getDebuggerEvents",
       {
         title: "Get Debugger Events",
@@ -561,9 +530,7 @@ export class NodeDebuggerMCPServer {
       async () => this.runOpenTool(() => this.debuggerManager.getDebuggerEvents()),
     );
 
-    this.tools.set("getDebuggerEvents", { tool: getDebuggerEventsTool, category: 'data' });
-
-    const clearDebuggerEventsTool = this.server.registerTool(
+    this.server.registerTool(
       "clearDebuggerEvents",
       {
         title: "Clear Debugger Events",
@@ -573,9 +540,7 @@ export class NodeDebuggerMCPServer {
       async () => this.runOpenTool(() => this.debuggerManager.clearDebuggerEvents()),
     );
 
-    this.tools.set("clearDebuggerEvents", { tool: clearDebuggerEventsTool, category: 'data' });
-
-    const getDebuggerStateTool = this.server.registerTool(
+    this.server.registerTool(
       "getDebuggerState",
       {
         title: "Get Debugger State",
@@ -607,9 +572,7 @@ export class NodeDebuggerMCPServer {
       }),
     );
 
-    this.tools.set("getDebuggerState", { tool: getDebuggerStateTool, category: 'inspection' });
-
-    const resolveOriginalPositionTool = this.server.registerTool(
+    this.server.registerTool(
       "resolveOriginalPosition",
       {
         title: "Resolve Original Position",
@@ -624,9 +587,7 @@ export class NodeDebuggerMCPServer {
         this.runOpenTool(() => this.debuggerManager.resolveOriginalPosition(generatedLine, generatedColumn, sourceMapPaths)),
     );
 
-    this.tools.set("resolveOriginalPosition", { tool: resolveOriginalPositionTool, category: 'data' });
-
-    const resolveGeneratedPositionTool = this.server.registerTool(
+    this.server.registerTool(
       "resolveGeneratedPosition",
       {
         title: "Resolve Generated Position",
@@ -649,11 +610,9 @@ export class NodeDebuggerMCPServer {
         )),
     );
 
-    this.tools.set("resolveGeneratedPosition", { tool: resolveGeneratedPositionTool, category: 'data' });
-
     // Additional DAP tools for complete protocol coverage
 
-    const launchTool = this.server.registerTool(
+    this.server.registerTool(
       "launch",
       {
         title: "Launch Program",
@@ -669,9 +628,7 @@ export class NodeDebuggerMCPServer {
         this.runGatedTool("launch", () => this.debuggerManager.launch({ program, args, cwd, env })),
     );
 
-    this.tools.set("launch", { tool: launchTool, category: 'connection' });
-
-    const threadsTool = this.server.registerTool(
+    this.server.registerTool(
       "threads",
       {
         title: "Get Threads",
@@ -681,9 +638,7 @@ export class NodeDebuggerMCPServer {
       async () => this.runGatedTool("threads", () => this.debuggerManager.threads()),
     );
 
-    this.tools.set("threads", { tool: threadsTool, category: 'inspection' });
-
-    const scopesTool = this.server.registerTool(
+    this.server.registerTool(
       "scopes",
       {
         title: "Get Scopes",
@@ -695,9 +650,7 @@ export class NodeDebuggerMCPServer {
       async ({ frameId }) => this.runGatedTool("scopes", () => this.debuggerManager.scopes(frameId)),
     );
 
-    this.tools.set("scopes", { tool: scopesTool, category: 'inspection' });
-
-    const setVariableTool = this.server.registerTool(
+    this.server.registerTool(
       "setVariable",
       {
         title: "Set Variable",
@@ -712,9 +665,7 @@ export class NodeDebuggerMCPServer {
         this.runGatedTool("setVariable", () => this.debuggerManager.setVariable(variablesReference, name, value)),
     );
 
-    this.tools.set("setVariable", { tool: setVariableTool, category: 'inspection' });
-
-    const loadedSourcesTool = this.server.registerTool(
+    this.server.registerTool(
       "loadedSources",
       {
         title: "Get Loaded Sources",
@@ -724,9 +675,7 @@ export class NodeDebuggerMCPServer {
       async () => this.runGatedTool("loadedSources", () => this.debuggerManager.loadedSources()),
     );
 
-    this.tools.set("loadedSources", { tool: loadedSourcesTool, category: 'inspection' });
-
-    const restartTool = this.server.registerTool(
+    this.server.registerTool(
       "restart",
       {
         title: "Restart Debugging Session",
@@ -736,9 +685,7 @@ export class NodeDebuggerMCPServer {
       async () => this.runGatedTool("restart", () => this.debuggerManager.restart()),
     );
 
-    this.tools.set("restart", { tool: restartTool, category: 'connection' });
-
-    const terminateTool = this.server.registerTool(
+    this.server.registerTool(
       "terminate",
       {
         title: "Terminate Process",
@@ -748,9 +695,7 @@ export class NodeDebuggerMCPServer {
       async () => this.runGatedTool("terminate", () => this.debuggerManager.terminate()),
     );
 
-    this.tools.set("terminate", { tool: terminateTool, category: 'connection' });
-
-    const exceptionInfoTool = this.server.registerTool(
+    this.server.registerTool(
       "exceptionInfo",
       {
         title: "Get Exception Information",
@@ -762,9 +707,7 @@ export class NodeDebuggerMCPServer {
       async ({ threadId }) => this.runGatedTool("exceptionInfo", () => this.debuggerManager.exceptionInfo(threadId)),
     );
 
-    this.tools.set("exceptionInfo", { tool: exceptionInfoTool, category: 'inspection' });
-
-    const setExceptionBreakpointsTool = this.server.registerTool(
+    this.server.registerTool(
       "setExceptionBreakpoints",
       {
         title: "Set Exception Breakpoints",
@@ -781,9 +724,7 @@ export class NodeDebuggerMCPServer {
         this.runGatedTool("setExceptionBreakpoints", () => this.debuggerManager.setExceptionBreakpoints(filters, exceptionOptions)),
     );
 
-    this.tools.set("setExceptionBreakpoints", { tool: setExceptionBreakpointsTool, category: 'debugging' });
-
-    const breakpointLocationsTool = this.server.registerTool(
+    this.server.registerTool(
       "breakpointLocations",
       {
         title: "Get Breakpoint Locations",
@@ -802,9 +743,7 @@ export class NodeDebuggerMCPServer {
         this.runGatedTool("breakpointLocations", () => this.debuggerManager.breakpointLocations(source, line, column, endLine, endColumn)),
     );
 
-    this.tools.set("breakpointLocations", { tool: breakpointLocationsTool, category: 'debugging' });
-
-    const gotoTool = this.server.registerTool(
+    this.server.registerTool(
       "goto",
       {
         title: "Go To Target",
@@ -818,9 +757,7 @@ export class NodeDebuggerMCPServer {
         this.runGatedTool("goto", () => this.debuggerManager.goto(threadId, targetId)),
     );
 
-    this.tools.set("goto", { tool: gotoTool, category: 'debugging' });
-
-    const restartFrameTool = this.server.registerTool(
+    this.server.registerTool(
       "restartFrame",
       {
         title: "Restart Frame",
@@ -833,19 +770,6 @@ export class NodeDebuggerMCPServer {
         this.runGatedTool("restartFrame", () => this.debuggerManager.restartFrame(frameId)),
     );
 
-    this.tools.set("restartFrame", { tool: restartFrameTool, category: 'debugging' });
-  }
-
-  private updateToolsAvailability() {
-    // Claude Code doesn't properly handle tools/list_changed notifications
-    // The issue is known: https://github.com/anthropics/claude-code/issues/2722
-    //
-    // As a workaround, we register ALL tools upfront and use runtime validation
-    // instead of dynamic enable/disable. This ensures all tools are always visible
-    // to Claude Code, but unavailable tools return helpful error messages.
-
-    // No-op: all tools are always registered and available in the tool list
-    // Tool availability is enforced at runtime by validateToolAvailability()
   }
 
   private async disconnect() {

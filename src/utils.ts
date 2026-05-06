@@ -104,15 +104,31 @@ export const sleep = setTimeout;
 // contains it, or null if none found before reaching the filesystem root.
 // DAPDebuggerManager and SourceMapResolver used to inline two slightly different
 // copies of this; centralise so a future change touches one place.
+//
+// Result is memoised by startDir within the process. Project structure does not
+// change at runtime, and findProjectRoot is on the source-map / setBreakpoints
+// hot path -- dropping the per-call existsSync chain is worth a tiny Map.
+const projectRootCache = new Map<string, string | null>();
+
 export function findProjectRoot(startDir: string): string | null {
+  const cached = projectRootCache.get(startDir);
+
+  if (cached !== undefined) {
+    return cached;
+  }
+
   let currentDir = startDir;
 
   while (currentDir !== dirname(currentDir)) {
     if (existsSync(join(currentDir, 'package.json'))) {
+      projectRootCache.set(startDir, currentDir);
+
       return currentDir;
     }
     currentDir = dirname(currentDir);
   }
+
+  projectRootCache.set(startDir, null);
 
   return null;
 }

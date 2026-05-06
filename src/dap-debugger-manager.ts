@@ -342,12 +342,24 @@ export class DAPDebuggerManager {
         throw new Error("Failed to set breakpoints");
       }
 
-      // Track all breakpoints that were successfully created
-      if (breakpoints) {
-        response.body.breakpoints.forEach((actualBreakpoint, index) => {
-          if (actualBreakpoint.id && breakpoints[index]) {
-            const bp = breakpoints[index];
+      // Track all breakpoints that were successfully created. Both shapes
+      // (`breakpoints` rich form and `lines` shorthand) need tracking so
+      // getBreakpoints() lists them; the previous code skipped the lines case.
+      interface TrackedSourceItem {
+        line: number;
+        column?: number | undefined;
+        condition?: string | undefined;
+        logMessage?: string | undefined;
+      }
 
+      const trackedSource: TrackedSourceItem[] | undefined = breakpoints
+        ?? lines?.map((line): TrackedSourceItem => ({ line }));
+
+      if (trackedSource) {
+        response.body.breakpoints.forEach((actualBreakpoint, index) => {
+          const bp = trackedSource[index];
+
+          if (actualBreakpoint.id && bp) {
             this.dapClient.addTrackedBreakpoint({
               breakpointId: actualBreakpoint.id,
               type: bp.logMessage ? 'logpoint' : 'breakpoint',

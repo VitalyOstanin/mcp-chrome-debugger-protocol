@@ -369,22 +369,19 @@ export class DAPClient extends EventEmitter {
     };
   }
 
-  // launch is not supported in this build (we always attach to a running process). The response
-  // is left as a successful no-op so existing code paths that issue 'launch' do not crash; the
-  // attached adapter is otherwise driven by attach/connectUrl flows.
+  // launch is not supported in this build (we always attach to a running process).
+  // Throwing surfaces an explicit error to the MCP client instead of pretending the
+  // program was launched while the adapter never spawned anything.
   private async buildLaunchResponse(
     requestId: number,
     args: NodeJSLaunchRequestArguments,
   ): Promise<DebugProtocol.LaunchResponse> {
+    void requestId;
     void args;
-
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: requestId,
-      command: 'launch',
-      success: true,
-    };
+    throw new Error(
+      'launch is not supported by this MCP server; start your Node.js process with ' +
+      '--inspect-brk and use the attach tool instead',
+    );
   }
 
   private resolveRequest(requestId: number, response: unknown): void {
@@ -459,7 +456,10 @@ export class DAPClient extends EventEmitter {
         p.once("spawn", () => { finish(true); });
         p.once("error", () => { finish(false); });
 
-        setTimeout(() => { finish(true); }, 200).unref();
+        // Fail-closed: if neither 'spawn' nor 'error' arrived within the window,
+        // treat the command as unavailable. The previous default of true caused
+        // strace probes to run on systems without strace and waste STRACE_TIMEOUT_MS.
+        setTimeout(() => { finish(false); }, 1000).unref();
       } catch {
         resolve(false);
       }
@@ -541,6 +541,9 @@ export class DAPClient extends EventEmitter {
   }
 
   // Poll candidate inspector ports until one responds or the deadline expires.
+  // Probes within a single round run in parallel so the worst case is bounded by
+  // probeTimeoutMs rather than candidates.length * probeTimeoutMs (the previous
+  // sequential implementation could exceed discoverTimeoutMs in a single pass).
   private async pollForInspectorPort(opts?: {
     discoverTimeoutMs?: number | undefined;
     probeTimeoutMs?: number | undefined;
@@ -553,13 +556,16 @@ export class DAPClient extends EventEmitter {
         (_, i) => INSPECTOR_PORT_RANGE.start + i,
       );
     const deadline = Date.now() + (opts?.discoverTimeoutMs ?? DEFAULTS.DISCOVER_TIMEOUT_MS);
+    const probeTimeoutMs = opts?.probeTimeoutMs ?? DEFAULTS.PROBE_TIMEOUT_MS;
 
     while (Date.now() < deadline) {
-      for (const cand of candidates) {
-        const ok = await this.probeInspector(cand, opts?.probeTimeoutMs ?? DEFAULTS.PROBE_TIMEOUT_MS);
+      const results = await Promise.all(
+        candidates.map(async (cand) => ({ cand, ok: await this.probeInspector(cand, probeTimeoutMs) })),
+      );
+      const hit = results.find((r) => r.ok);
 
-        if (ok) return cand;
-      }
+      if (hit) return hit.cand;
+
       await sleep(200);
     }
 
@@ -638,14 +644,13 @@ export class DAPClient extends EventEmitter {
         supportsLogPoints: true,
       });
 
-      // Attach to the Node.js process
+      // Attach to the Node.js process. The 'attach' handler in dapHandlers already
+      // toggles connection state on success; do not duplicate emitStateChange here
+      // or every subscriber will get two notifications per attach.
       await this.sendRequest('attach', {
         port: args.port ?? DEFAULTS.INSPECTOR_PORT,
         address: args.address ?? 'localhost',
       });
-
-      this.connection.isConnected = true;
-      this.emitStateChange(true);
 
       return createSuccessResponse({
         message: `Attached to Node.js process on ${args.address ?? 'localhost'}:${args.port ?? DEFAULTS.INSPECTOR_PORT}`,
@@ -662,7 +667,10 @@ export class DAPClient extends EventEmitter {
   async disconnect(): Promise<void> {
     if (this.connection.adapter) {
       try {
-        await this.sendRequest('disconnect', {});
+        // Call the adapter's disconnect directly: 'disconnect' is not registered
+        // in dapHandlers, and routing through sendRequest would just throw and
+        // skip the actual cleanup of cdpTransport / nodeProcess.
+        await this.connection.adapter.disconnect();
       } catch {
         // Ignore disconnect errors
       }

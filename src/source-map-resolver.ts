@@ -25,12 +25,24 @@ interface CachedTraceMap {
 }
 
 const TRACE_MAP_CACHE_LIMIT = 32;
+// findSourceMapsInDirs walks dist/build/out/lib recursively for *.js.map. The
+// previous implementation re-walked on every breakpoint, which is O(files) per
+// breakpoint on large bundles. Cache the listing per-roots-key for a short TTL
+// so an interactive session reuses it; new builds are picked up on the next
+// expiry.
+const SOURCE_MAP_LISTING_TTL_MS = 30_000;
+
+interface SourceMapListing {
+  files: string[];
+  expiresAt: number;
+}
 
 export class SourceMapResolver {
   // mapFile -> { mtime, parsed TraceMap }. Trim oldest entries past the limit so a long
   // session debugging across many bundles doesn't grow unbounded. mtime+size tracking
   // means rebuilds are only paid for files that actually changed on disk.
   private readonly traceMapCache = new Map<string, CachedTraceMap>();
+  private readonly sourceMapListingCache = new Map<string, SourceMapListing>();
 
   private async getTraceMap(mapFile: string): Promise<CachedTraceMap | null> {
     try {
@@ -113,6 +125,14 @@ export class SourceMapResolver {
   }
 
   private async findSourceMapsInDirs(roots: string[]): Promise<string[]> {
+    const cacheKey = [...roots].sort().join('|');
+    const now = Date.now();
+    const cached = this.sourceMapListingCache.get(cacheKey);
+
+    if (cached && cached.expiresAt > now) {
+      return cached.files;
+    }
+
     const results: string[] = [];
 
     for (const root of roots) {
@@ -124,6 +144,11 @@ export class SourceMapResolver {
         }
       }
     }
+
+    this.sourceMapListingCache.set(cacheKey, {
+      files: results,
+      expiresAt: now + SOURCE_MAP_LISTING_TTL_MS,
+    });
 
     return results;
   }
@@ -158,12 +183,15 @@ export class SourceMapResolver {
   }
 
   /**
-   * Resolve source map position for TypeScript/JavaScript mapping
+   * Resolve source map position for TypeScript/JavaScript mapping.
+   * columnNumber is required: resolveGeneratedPosition rejects 0 (1-based check),
+   * so a default of 0 caused every defaulted call to silently fall back to the
+   * original path. Callers must pass a real 1-based column.
    */
   async resolveSourceMapPosition(
     filePath: string,
     lineNumber: number,
-    columnNumber: number = 0,
+    columnNumber: number,
   ): Promise<SourceMapResolution> {
     let targetFilePath = filePath;
     let targetLineNumber = lineNumber;
@@ -177,30 +205,58 @@ export class SourceMapResolver {
         const relativePath = srcMarkerIdx !== -1
           ? filePath.substring(srcMarkerIdx + 1)
           : filePath;
-        // Find source map files from the target project directory
-        const projectRoot = findProjectRoot(filePath);
-        const sourceMapPaths = projectRoot ? await this.findSourceMapsInDirs([projectRoot]) : [];
+        // Try the cheap sibling build-dir lookup first; only walk the full
+        // build trees if no sibling map yields a successful generated position.
+        const siblings = this.siblingMapCandidates(filePath);
+        let resolved: { sourceMapUsed: string; line: number; column: number; matchedSource: string } | null = null;
 
-        // Also try a direct sibling build directory next to the TS source.
-        for (const candidate of this.siblingMapCandidates(filePath)) {
-          if (!sourceMapPaths.includes(candidate)) {
-            sourceMapPaths.push(candidate);
+        if (siblings.length > 0) {
+          const siblingResult = await this.resolveGeneratedPosition(relativePath, lineNumber, columnNumber, siblings);
+          const siblingData = JSON.parse(siblingResult.content[0]!.text);
+
+          if (siblingData.success) {
+            resolved = {
+              sourceMapUsed: siblingData.sourceMapUsed,
+              line: siblingData.generatedPosition.line,
+              column: siblingData.generatedPosition.column,
+              matchedSource: siblingData.matchedSource,
+            };
           }
         }
 
-        const resolveResult = await this.resolveGeneratedPosition(relativePath, lineNumber, columnNumber, sourceMapPaths);
-        const resolveData = JSON.parse(resolveResult.content[0]!.text);
+        if (!resolved) {
+          const projectRoot = findProjectRoot(filePath);
+          const sourceMapPaths = projectRoot ? await this.findSourceMapsInDirs([projectRoot]) : [];
 
-        if (resolveData.success) {
+          for (const candidate of siblings) {
+            if (!sourceMapPaths.includes(candidate)) {
+              sourceMapPaths.push(candidate);
+            }
+          }
+
+          const resolveResult = await this.resolveGeneratedPosition(relativePath, lineNumber, columnNumber, sourceMapPaths);
+          const resolveData = JSON.parse(resolveResult.content[0]!.text);
+
+          if (resolveData.success) {
+            resolved = {
+              sourceMapUsed: resolveData.sourceMapUsed,
+              line: resolveData.generatedPosition.line,
+              column: resolveData.generatedPosition.column,
+              matchedSource: resolveData.matchedSource,
+            };
+          }
+        }
+
+        if (resolved) {
           sourceMapInfo = {
             success: true,
-            sourceMapUsed: resolveData.sourceMapUsed,
-            matchedSource: resolveData.matchedSource,
+            sourceMapUsed: resolved.sourceMapUsed,
+            matchedSource: resolved.matchedSource,
           };
 
-          targetFilePath = resolveData.sourceMapUsed.replace(/\.js\.map$/, '.js');
-          targetLineNumber = resolveData.generatedPosition.line;
-          targetColumnNumber = resolveData.generatedPosition.column;
+          targetFilePath = resolved.sourceMapUsed.replace(/\.js\.map$/, '.js');
+          targetLineNumber = resolved.line;
+          targetColumnNumber = resolved.column;
         }
       } catch {
         // Fall back to original path
