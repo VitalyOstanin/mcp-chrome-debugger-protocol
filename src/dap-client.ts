@@ -145,12 +145,20 @@ export class DAPClient extends EventEmitter {
         const executionContextId = parsedBody.data.executionContextId ?? 0;
         const payloadRaw = parsedBody.data.payload ?? '';
         let parsed: unknown = undefined;
-        let message: string | undefined = undefined;
+        let message: string | undefined;
 
         try {
           parsed = JSON.parse(payloadRaw);
-          if (parsed && typeof parsed === 'object' && 'message' in (parsed as Record<string, unknown>)) {
-            message = String((parsed as Record<string, unknown>).message);
+          // Object: prefer the `message` field if present; fall back to a
+          // canonical JSON string. Array/scalar/null: stringify the value
+          // itself so `message` reflects the original payload instead of
+          // silently dropping it.
+          if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const obj = parsed as Record<string, unknown>;
+
+            message = 'message' in obj ? String(obj.message) : payloadRaw;
+          } else {
+            message = String(parsed);
           }
         } catch {
           // not JSON
@@ -500,6 +508,20 @@ export class DAPClient extends EventEmitter {
 
     return new Promise<number | undefined>((resolve) => {
       let detectedPort: number | undefined;
+      // Declare cleanup before the listener closures so a future reorder cannot
+      // re-introduce a TDZ ReferenceError when onData fires before cleanup is
+      // initialised. cleanup itself only references onData/onExit lazily inside
+      // its body, so closure resolution is fine.
+      const cleanup = () => {
+        strace.stderr?.off("data", onData);
+        strace.stdout?.off("data", onData);
+        strace.off("exit", onExit);
+        try {
+          strace.kill();
+        } catch {
+          /* ignore */
+        }
+      };
       const onData = (buf: Buffer) => {
         const out = buf.toString();
         const fullUrlMatch = out.match(/Debugger listening on (ws:\/\/[^\s]+)/);
@@ -518,16 +540,6 @@ export class DAPClient extends EventEmitter {
         }
       };
       const onExit = () => { resolve(detectedPort); };
-      const cleanup = () => {
-        strace.stderr?.off("data", onData);
-        strace.stdout?.off("data", onData);
-        strace.off("exit", onExit);
-        try {
-          strace.kill();
-        } catch {
-          /* ignore */
-        }
-      };
 
       strace.stderr?.on("data", onData);
       strace.stdout?.on("data", onData);
@@ -549,12 +561,16 @@ export class DAPClient extends EventEmitter {
     probeTimeoutMs?: number | undefined;
     ports?: number[] | undefined;
   }): Promise<number | undefined> {
-    const candidates: number[] = opts?.ports?.length
-      ? opts.ports
-      : Array.from(
-        { length: INSPECTOR_PORT_RANGE.end - INSPECTOR_PORT_RANGE.start + 1 },
-        (_, i) => INSPECTOR_PORT_RANGE.start + i,
-      );
+    // Honour an explicit empty list as "do not poll" instead of silently
+    // expanding to the default 9229..9250 range. `??` distinguishes undefined
+    // (use default sequence) from an empty array (caller opted out of probing).
+    const candidates: number[] = opts?.ports ?? Array.from(
+      { length: INSPECTOR_PORT_RANGE.end - INSPECTOR_PORT_RANGE.start + 1 },
+      (_, i) => INSPECTOR_PORT_RANGE.start + i,
+    );
+
+    if (candidates.length === 0) return undefined;
+
     const deadline = Date.now() + (opts?.discoverTimeoutMs ?? DEFAULTS.DISCOVER_TIMEOUT_MS);
     const probeTimeoutMs = opts?.probeTimeoutMs ?? DEFAULTS.PROBE_TIMEOUT_MS;
 
