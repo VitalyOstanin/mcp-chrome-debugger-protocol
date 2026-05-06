@@ -632,6 +632,48 @@ export class NodeJSDebugAdapter extends DebugSession {
 
   // Attempt scriptId-based placement (most reliable when scripts are loaded).
   // Returns updated location info plus the cdpResult, or null if placement failed.
+  // Ask V8 for the possible breakpoint locations in a [baseLine0+startDelta,
+  // baseLine0+endDelta] window and pick the best match — first location at or
+  // after the requested column, otherwise the location closest to baseLine0.
+  // Lines/columns here are 0-based (CDP coordinate system).
+  private async findBreakpointLocationInRange(
+    scriptId: string,
+    baseLine0: number,
+    baseCol0: number,
+    startDelta: number,
+    endDelta: number,
+  ): Promise<Protocol.Debugger.BreakLocation | undefined> {
+    if (!this.cdpTransport) return undefined;
+
+    const start: Protocol.Debugger.Location = {
+      scriptId,
+      lineNumber: Math.max(0, baseLine0 + startDelta),
+      columnNumber: 0,
+    };
+    const end: Protocol.Debugger.Location = {
+      scriptId,
+      lineNumber: Math.max(start.lineNumber, baseLine0 + endDelta),
+      columnNumber: END_COLUMN_LARGE,
+    };
+    const possible = await this.cdpTransport.sendCommand<Protocol.Debugger.GetPossibleBreakpointsResponse>(
+      "Debugger.getPossibleBreakpoints",
+      { start, end, restrictToFunction: false },
+    );
+    const locs = possible.locations;
+
+    if (!locs.length) return undefined;
+
+    const after = locs.filter(
+      (l) => l.lineNumber > baseLine0 || (l.lineNumber === baseLine0 && (l.columnNumber ?? 0) >= baseCol0),
+    );
+
+    if (after.length) return after[0];
+
+    return locs.sort(
+      (a, b) => Math.abs(a.lineNumber - baseLine0) - Math.abs(b.lineNumber - baseLine0),
+    )[0];
+  }
+
   private async placeBreakpointByScriptId(
     targetPath: string,
     targetLine: number,
@@ -649,42 +691,12 @@ export class NodeJSDebugAdapter extends DebugSession {
     try {
       const baseLine0 = Math.max(0, targetLine - 1);
       const baseCol0 = Math.max(0, targetColumn - 1);
-      const tryRange = async (startDelta: number, endDelta: number) => {
-        const start: Protocol.Debugger.Location = {
-          scriptId,
-          lineNumber: Math.max(0, baseLine0 + startDelta),
-          columnNumber: 0,
-        };
-        const end: Protocol.Debugger.Location = {
-          scriptId,
-          lineNumber: Math.max(start.lineNumber, baseLine0 + endDelta),
-          columnNumber: END_COLUMN_LARGE,
-        };
-        const possible =
-          await this.cdpTransport!.sendCommand<Protocol.Debugger.GetPossibleBreakpointsResponse>(
-            "Debugger.getPossibleBreakpoints",
-            { start, end, restrictToFunction: false },
-          );
-        const locs = possible.locations;
-
-        if (!locs.length) return undefined;
-
-        const after = locs.filter(
-          (l) => l.lineNumber > baseLine0 || (l.lineNumber === baseLine0 && (l.columnNumber ?? 0) >= baseCol0),
-        );
-
-        if (after.length) return after[0];
-
-        return locs.sort(
-          (a, b) => Math.abs(a.lineNumber - baseLine0) - Math.abs(b.lineNumber - baseLine0),
-        )[0];
-      };
       // Walk the configured fallback windows: each retry widens the search so
       // a slightly off column still resolves to the nearest valid statement.
       let chosen: Protocol.Debugger.BreakLocation | undefined;
 
       for (const [startDelta, endDelta] of BREAKPOINT_SEARCH_WINDOWS) {
-        chosen = await tryRange(startDelta, endDelta);
+        chosen = await this.findBreakpointLocationInRange(scriptId, baseLine0, baseCol0, startDelta, endDelta);
         if (chosen) break;
       }
 
