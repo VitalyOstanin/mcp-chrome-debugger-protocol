@@ -366,13 +366,16 @@ export class DAPDebuggerManager {
               originalRequest: {
                 filePath: absolutePath,
                 lineNumber: bp.line,
-                columnNumber: bp.column ?? 0,
+                // MCP/DAP coordinates are 1-based; default the column to 1 so
+                // tracking matches the adapter (nodejs-debug-adapter:805) and
+                // SourceMapResolver, which reject column < 1.
+                columnNumber: bp.column ?? 1,
                 condition: bp.condition,
                 logMessage: bp.logMessage,
               },
               actualLocation: {
                 lineNumber: actualBreakpoint.line ?? bp.line,
-                columnNumber: actualBreakpoint.column ?? (bp.column ?? 0),
+                columnNumber: actualBreakpoint.column ?? (bp.column ?? 1),
               },
               sourceMapResolution: {
                 used: false,
