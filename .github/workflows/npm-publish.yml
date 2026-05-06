@@ -9,6 +9,13 @@ on:
     tags:
       - 'v*'
 
+# Serialise tag-triggered publishes so two concurrent tags can't race each
+# other through `npm publish --provenance`. Disable cancel-in-progress: a
+# half-finished release is worse than waiting for the previous one to finish.
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
