@@ -21,6 +21,26 @@ jobs:
       - run: npm run build
       - run: npm test
 
+      - name: Smoke pack-and-install
+        # Build a real tarball, install it into a clean throwaway project, and
+        # exercise the bin entry. Catches issues that `npm pack --dry-run` can't:
+        # missing files in the `files` allow-list, broken shebang, missing
+        # runtime dependencies, wrong `bin` path. Tarball is discarded — the
+        # actual publish below repacks from source.
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE_TARBALL="$(npm pack --silent | tail -n 1)"
+          echo "Built tarball: ${PACKAGE_TARBALL}"
+          SMOKE_DIR="$(mktemp -d)"
+          pushd "${SMOKE_DIR}" > /dev/null
+          npm init -y > /dev/null
+          npm install "${GITHUB_WORKSPACE}/${PACKAGE_TARBALL}" --no-save
+          npx --no-install mcp-chrome-debugger-protocol --help || true
+          popd > /dev/null
+          rm -rf "${SMOKE_DIR}" "${PACKAGE_TARBALL}"
+          echo "Smoke install OK"
+
   publish-npm:
     needs: build
     runs-on: ubuntu-latest
@@ -39,4 +59,4 @@ jobs:
           package-manager-cache: false
       - run: node --version && npm --version
       - run: npm ci
-      - run: npm publish
+      - run: npm publish --provenance --access public

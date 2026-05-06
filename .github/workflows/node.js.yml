@@ -9,15 +9,26 @@ on:
   pull_request:
     branches: [ "master" ]
 
+# Least-privilege default. The CI workflow only needs to read the repo to
+# build and test; jobs that need additional scopes should opt in explicitly.
+permissions:
+  contents: read
+
+# Cancel in-flight runs on the same ref when a new commit lands. Saves CI
+# minutes and avoids double-publishing intermediate artifacts.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
-
     runs-on: ubuntu-latest
     # Bound the job so a hung integration test (real Node.js inspector debuggee) cannot
     # eat the GitHub Actions default 6h budget and block the runner queue.
     timeout-minutes: 25
 
     strategy:
+      fail-fast: false
       matrix:
         node-version: [22.x, 24.x]
         # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
@@ -33,5 +44,49 @@ jobs:
     - run: npm ci
     - run: npm run lint
     - run: npm run build --if-present
-    - run: npm test
+    - run: npm run test:coverage
+
+    - name: Upload coverage to Codecov
+      # Run on a single matrix entry — uploading the same report twice
+      # under different Node versions just creates noise on the Codecov side
+      # without changing what we measure.
+      if: matrix.node-version == '22.x'
+      # codecov/codecov-action pinned to v6.0.0
+      uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2
+      with:
+        files: ./coverage/lcov.info
+        flags: unit
+        # Token is optional for public repos but Codecov v6 strongly
+        # recommends it. Configure CODECOV_TOKEN under Settings → Secrets.
+        token: ${{ secrets.CODECOV_TOKEN }}
+        # Don't fail the build on Codecov outages — coverage drift is
+        # signal, not a release blocker.
+        fail_ci_if_error: false
+
     - run: npm run test:integration
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions/setup-node@v6
+      with:
+        node-version: 22.x
+        cache: 'npm'
+
+    - run: npm ci
+
+    # Production deps reach end users via the published package, so a high
+    # or critical advisory there fails the build until it's resolved
+    # (upgrade, override in package.json, or accepted-risk note in PR).
+    - name: Audit production dependencies
+      run: npm audit --omit=dev --audit-level=high
+
+    # Dev-only advisories (build tooling, test runners) don't ship to
+    # users — keep them visible in the run log but don't block PRs on
+    # transient upstream advisories that have no production exposure.
+    - name: Audit all dependencies (advisory only)
+      run: npm audit --audit-level=high
+      continue-on-error: true
