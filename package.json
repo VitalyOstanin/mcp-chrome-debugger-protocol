@@ -10,9 +10,10 @@
     "mcp-chrome-debugger-protocol": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "postbuild": "chmod +x dist/index.js",
-    "dev": "tsc --watch",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "typecheck": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "dev:server": "npm run build && node dist/index.js",
     "dev:test": "bash scripts/dev-test.sh",
@@ -25,8 +26,8 @@
     "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:integration:watch": "vitest --config vitest.integration.config.ts",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
+    "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
+    "lint:fix": "eslint . --fix --cache --cache-location node_modules/.cache/eslint/",
     "prepublishOnly": "npm run build"
   },
   "author": "Vitaly Ostanin <vitaly.ostanin@gmail.com>",

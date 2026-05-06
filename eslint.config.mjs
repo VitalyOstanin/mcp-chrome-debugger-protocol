@@ -12,7 +12,7 @@ export default [
     languageOptions: {
       parser: tseslint.parser,
       parserOptions: {
-        project: './tsconfig.lint.json',
+        projectService: true,
         tsconfigRootDir: import.meta.dirname,
         sourceType: 'module',
       },
