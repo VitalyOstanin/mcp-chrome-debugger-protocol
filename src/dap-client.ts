@@ -5,6 +5,7 @@ import { NodeJSDebugAdapter, type NodeJSLaunchRequestArguments, type NodeJSAttac
 import type { LogpointHit, DebuggerEvent, TrackedBreakpoint } from './types.js';
 import { createSuccessResponse, createErrorResponse, type MCPResponse } from './utils.js';
 import { DEFAULTS, INSPECTOR_PORT_RANGE } from './constants.js';
+import { logVerbose } from './logger.js';
 import { kill } from 'node:process';
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -148,7 +149,11 @@ export class DAPClient extends EventEmitter {
         const parsedBody = McpLogpointEventBody.safeParse(event.body);
 
         if (!parsedBody.success) {
-          // Ignore malformed custom event bodies
+          // Ignore malformed custom event bodies. Surface the parse error in
+          // verbose mode so a debugging session can spot a misshapen logpoint
+          // payload instead of silently dropping the hit.
+          logVerbose('dap-client', `mcpLogpoint event body failed Zod parse: ${parsedBody.error.message}`);
+
           return;
         }
 
@@ -630,6 +635,8 @@ export class DAPClient extends EventEmitter {
         },
       });
     } catch {
+      // attachResult.content[0].text was not JSON we could enrich; return the
+      // raw result unchanged so the caller still sees attach success/failure.
       return attachResult;
     }
   }
@@ -755,7 +762,9 @@ export class DAPClient extends EventEmitter {
         // skip the actual cleanup of cdpTransport / nodeProcess.
         await this.connection.adapter.disconnect();
       } catch {
-        // Ignore disconnect errors
+        // disconnect() is best-effort cleanup; the adapter may already be torn
+        // down from a debuggee crash. We still null out connection.adapter
+        // below so subsequent attaches start from a clean slate.
       }
 
       this.connection.adapter = null;

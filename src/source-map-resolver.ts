@@ -1,9 +1,22 @@
 import { TraceMap, originalPositionFor, generatedPositionFor, LEAST_UPPER_BOUND } from "@jridgewell/trace-mapping";
-import { existsSync } from "node:fs";
-import { readFile, stat, readdir } from "node:fs/promises";
+import { readFile, stat, readdir, access } from "node:fs/promises";
 import { join } from "node:path";
 import { findProjectRoot } from "./utils.js";
 import { BUILD_DIRS, SOURCE_DIR_MARKER } from "./constants.js";
+
+// Async existence check via fs.access — returns true on success, false on any
+// error (ENOENT, EACCES, etc). Keeps the call-sites here off the synchronous
+// existsSync hot path so a slow stat does not block the event loop while
+// resolving breakpoints / source maps.
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export interface SourceMapResolution {
   targetFilePath: string;
@@ -129,6 +142,9 @@ export class SourceMapResolver {
 
       return entry;
     } catch {
+      // stat/readFile failure (file vanished mid-build, permission denied,
+      // malformed map JSON). Treat as cache miss; the caller falls back to the
+      // original (TS) path so a broken map never blocks debugging.
       return null;
     }
   }
@@ -143,6 +159,8 @@ export class SourceMapResolver {
       try {
         entries = await readdir(current, { withFileTypes: true });
       } catch {
+        // Skip unreadable directories (permission denied / race during walk);
+        // a missing build subtree is not fatal, callers handle empty listings.
         return;
       }
 
@@ -177,7 +195,7 @@ export class SourceMapResolver {
       for (const dir of BUILD_DIRS) {
         const candidate = join(root, dir);
 
-        if (existsSync(candidate)) {
+        if (await pathExists(candidate)) {
           results.push(...await this.collectSourceMapFiles(candidate));
         }
       }
@@ -193,7 +211,7 @@ export class SourceMapResolver {
 
   // Sibling build dirs next to a TS source under <root>/src/.../foo.ts produce
   // <root>/(dist|build|out|lib)/foo.js.map -- collect those candidates without walking.
-  private siblingMapCandidates(originalSourcePath: string): string[] {
+  private async siblingMapCandidates(originalSourcePath: string): Promise<string[]> {
     // Normalise to forward slashes so the marker also matches Windows-style
     // paths ("...\\src\\foo.ts"). Without this, the cheap sibling-lookup
     // shortcut quietly degrades to the full build-dir scan on Windows.
@@ -209,10 +227,10 @@ export class SourceMapResolver {
     if (!baseName) return [];
 
     const mapName = baseName.replace(/\.ts$/, '.js.map');
+    const candidates = BUILD_DIRS.map(dir => join(baseRoot, dir, mapName));
+    const existsFlags = await Promise.all(candidates.map(c => pathExists(c)));
 
-    return BUILD_DIRS
-      .map(dir => join(baseRoot, dir, mapName))
-      .filter(candidate => existsSync(candidate));
+    return candidates.filter((_, i) => existsFlags[i]);
   }
 
   /**
@@ -249,7 +267,7 @@ export class SourceMapResolver {
           : filePath;
         // Try the cheap sibling build-dir lookup first; only walk the full
         // build trees if no sibling map yields a successful generated position.
-        const siblings = this.siblingMapCandidates(filePath);
+        const siblings = await this.siblingMapCandidates(filePath);
         let resolved: { sourceMapUsed: string; line: number; column: number; matchedSource: string } | null = null;
 
         if (siblings.length > 0) {
@@ -301,7 +319,9 @@ export class SourceMapResolver {
           targetColumnNumber = resolved.column;
         }
       } catch {
-        // Fall back to original path
+        // Any source-map resolution failure (no project root, malformed maps,
+        // missing sibling) falls back to the original TS path. The runtime
+        // will surface a "no script for url" diagnostic if the path was wrong.
       }
     }
 
@@ -455,7 +475,9 @@ export class SourceMapResolver {
     // discover, just use these" -- callers rely on this to opt out of the
     // process.cwd() autodiscovery that would otherwise leak unrelated maps.
     if (sourceMapPaths !== undefined) {
-      return sourceMapPaths.filter(path => existsSync(path));
+      const existsFlags = await Promise.all(sourceMapPaths.map(p => pathExists(p)));
+
+      return sourceMapPaths.filter((_, i) => existsFlags[i]);
     }
 
     const collected: string[] = [];
@@ -467,11 +489,13 @@ export class SourceMapResolver {
         try {
           collected.push(...await this.findSourceMapsInDirs([projectRoot]));
         } catch {
-          // ignore
+          // findSourceMapsInDirs swallows per-directory errors itself; this
+          // outer catch is a safety net for an unexpected throw (TraceMap
+          // construction). siblingMapCandidates below is still useful.
         }
       }
 
-      for (const candidate of this.siblingMapCandidates(originalSourcePath)) {
+      for (const candidate of await this.siblingMapCandidates(originalSourcePath)) {
         if (!collected.includes(candidate)) {
           collected.push(candidate);
         }

@@ -9,6 +9,7 @@ import { DAPClient } from "./dap-client.js";
 import { DAPDebuggerManager } from "./dap-debugger-manager.js";
 import { ToolStateManager } from "./tool-state-manager.js";
 import { DEFAULTS, INSPECTOR_PORT_RANGE } from "./constants.js";
+import { logError } from "./logger.js";
 
 // Shared Zod schemas. MCP/DAP coordinate system is 1-based for both lines and columns.
 const lineNumberSchema = z.number().int().min(1).describe("Line number (1-based)");
@@ -111,7 +112,7 @@ export class NodeDebuggerMCPServer {
         ...data,
       },
     }).catch((error: unknown) => {
-      console.error(`Failed to send ${type} notification:`, error);
+      logError(`Failed to send ${type} notification`, error);
     });
   }
 
@@ -158,7 +159,7 @@ export class NodeDebuggerMCPServer {
           payload: logpointHit.payload,
         },
       }).catch((error: unknown) => {
-        console.error('Failed to send logpoint hit notification:', error);
+        logError('Failed to send logpoint hit notification', error);
       });
     });
 
@@ -173,7 +174,7 @@ export class NodeDebuggerMCPServer {
           data: debuggerEvent.data,
         },
       }).catch((error: unknown) => {
-        console.error('Failed to send debugger paused notification:', error);
+        logError('Failed to send debugger paused notification', error);
       });
     });
 
@@ -188,7 +189,7 @@ export class NodeDebuggerMCPServer {
           data: debuggerEvent.data,
         },
       }).catch((error: unknown) => {
-        console.error('Failed to send debugger resumed notification:', error);
+        logError('Failed to send debugger resumed notification', error);
       });
     });
 
@@ -203,7 +204,7 @@ export class NodeDebuggerMCPServer {
           timestamp: new Date().toISOString(),
         },
       }).catch((error: unknown) => {
-        console.error('Failed to send connection state notification:', error);
+        logError('Failed to send connection state notification', error);
       });
     });
   }

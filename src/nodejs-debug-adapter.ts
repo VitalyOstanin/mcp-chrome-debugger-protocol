@@ -424,7 +424,12 @@ export class NodeJSDebugAdapter extends DebugSession {
               const plain = params.url.replace(/^file:\/\//, "");
 
               this.indexScriptUrl(plain, params.scriptId);
-            } catch { /* ignore */ }
+            } catch (error) {
+              // Indexing the plain-path alias is best-effort: the file:// URL
+              // form is already indexed above, so a malformed plain path only
+              // costs us the cheap basename-lookup shortcut.
+              this.diagnostic(`indexScriptUrl(plain) failed for ${params.url}: ${error instanceof Error ? error.message : String(error)}`);
+            }
           }
         }
         break;
@@ -440,8 +445,11 @@ export class NodeJSDebugAdapter extends DebugSession {
               { name: "__mcpLogPoint", executionContextId: params.context.id },
             );
           }
-        } catch {
-          // best-effort; ignore errors
+        } catch (error) {
+          // addBinding can race a context being torn down before we install
+          // the binding; fall through silently. New contexts retry on their
+          // own executionContextCreated event.
+          this.diagnostic(`Runtime.addBinding for new context failed: ${error instanceof Error ? error.message : String(error)}`);
         }
         break;
       }
@@ -465,7 +473,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         this.handleException(event.params as Protocol.Runtime.ExceptionThrownEvent);
         break;
       case "Runtime.bindingCalled": {
-        // Forward logpoint binding payload to client via a custom DAP event
+        // Forward logpoint binding payload to client via a custom DAP event.
         try {
           const params = event.params as Protocol.Runtime.BindingCalledEvent;
 
@@ -476,8 +484,10 @@ export class NodeJSDebugAdapter extends DebugSession {
               payload: params.payload,
             }),
           );
-        } catch {
-          // ignore malformed payloads
+        } catch (error) {
+          // Surface in DAP_VERBOSE so a misshapen binding payload from the
+          // logpoint expression does not silently disappear.
+          this.diagnostic(`bindingCalled forward failed: ${error instanceof Error ? error.message : String(error)}`);
         }
         break;
       }
@@ -731,7 +741,12 @@ export class NodeJSDebugAdapter extends DebugSession {
       this.diagnostic(`setBreakpointByUrl at ${fileUrl}:${targetLine}:${targetColumn} (exact url)\n`);
 
       return cdpResult;
-    } catch {
+    } catch (error) {
+      // Exact-URL placement can fail when V8 normalises the script URL
+      // differently (case, symlinks, percent-encoding). Fall through to a
+      // urlRegex match before giving up.
+      this.diagnostic(`setBreakpointByUrl exact-url failed: ${error instanceof Error ? error.message : String(error)}; retrying via urlRegex`);
+
       const escapedPath = targetPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const cdpResult = await this.cdpTransport.sendCommand<Protocol.Debugger.SetBreakpointByUrlResponse>(
         "Debugger.setBreakpointByUrl",

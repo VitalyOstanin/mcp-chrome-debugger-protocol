@@ -1,3 +1,5 @@
+import { logError } from "./logger.js";
+
 export interface ToolStateInfo {
   isEnabled: boolean;
   reason?: string | undefined;
@@ -160,7 +162,7 @@ export class ToolStateManager {
       try {
         callback(this.isConnected, this.isPaused);
       } catch (error) {
-        console.error('Error in state change callback:', error);
+        logError('Error in state change callback', error);
       }
     });
   }

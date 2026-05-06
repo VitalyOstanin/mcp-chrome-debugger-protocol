@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { NodeDebuggerMCPServer } from "./mcp-server.js";
+import { logError } from "./logger.js";
 
 async function main() {
   const server = new NodeDebuggerMCPServer();
@@ -9,6 +10,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error("Server error:", error);
+  logError("Server error", error);
   process.exit(1);
 });
