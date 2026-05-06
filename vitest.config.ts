@@ -21,14 +21,8 @@ export default defineConfig({
         '**/*.test.ts',
         '**/*.spec.ts',
       ],
-      // Floors set just below current values so a regression fails the build
-      // but small fluctuations don't. Raise these after adding more tests.
-      thresholds: {
-        statements: 0,
-        branches: 0,
-        functions: 0,
-        lines: 0,
-      },
+      // No thresholds: with the current single unit-test, any non-zero floor is
+      // arbitrary. Re-introduce real values once meaningful unit coverage exists.
     },
   },
 });

@@ -64,30 +64,10 @@ describe("MCP Chrome Debugger Protocol - Connection Tests", () => {
   });
 
   describe("attach with default port", () => {
-    // TODO: rework to dynamically allocate a port and stub DEFAULTS.INSPECTOR_PORT,
-    // or move to an isolated env so port 9229 cannot conflict with concurrent runs.
-    it.skip("should connect to default debugger port (9229)", async () => {
-      // This test is disabled because it requires a debugger running on fixed port 9229,
-      // which we don't want to do by default in tests to avoid port conflicts.
-      // The connect_default functionality is tested indirectly through other connection tests.
-      const { pid, port } = await testApp.start({
-        enableDebugger: true,
-        // Let the system choose the port instead of forcing 9229
-      });
-
-      expect(pid).toBeDefined();
-      expect(port).toBeDefined();
-
-      const result = await mcpClient.callTool("attach");
-      // The connection may succeed or fail depending on port availability
-      const resultData = JSON.parse(result.content[0]!.text);
-
-      if (!resultData.success) {
-        expect(resultData.success).toBe(false);
-      } else {
-        expect(resultData.success).toBe(true);
-      }
-    }, 30000);
+    // Note: a "connect to fixed port 9229" case used to live here as it.skip.
+    // It was removed because it required a debugger on a fixed system port,
+    // which conflicts with concurrent runs. The same code path (no-args attach
+    // -> connectDefault) is exercised indirectly by URL/PID-based tests below.
 
     it("should fail with invalid WebSocket URL", async () => {
       const url = "ws://127.0.0.1:65000";

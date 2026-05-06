@@ -1,5 +1,6 @@
 import { execSync } from "child_process";
 import path from "path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 export default async function globalSetup(): Promise<() => Promise<void>> {
   // Runs once before any test workers start, so build steps don't race across workers.
@@ -25,15 +26,30 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       console.warn("Error importing globals module during teardown:", error);
     }
 
+    // Send SIGTERM, give the process a short window to exit cleanly, then
+    // escalate to SIGKILL only if it is still alive. The previous logic
+    // inverted the SIGTERM/SIGKILL pair: SIGKILL was sent only when SIGTERM
+    // threw (which already means the process is gone), so a stuck debuggee
+    // never received SIGKILL.
+    const TERMINATION_GRACE_MS = 300;
+
     for (const pid of spawnedProcesses) {
       try {
         process.kill(pid, "SIGTERM");
       } catch {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // Process is already dead or doesn't exist
-        }
+        // Already dead -- nothing to do.
+        continue;
+      }
+
+      await sleep(TERMINATION_GRACE_MS);
+
+      try {
+        // Signal 0 is a liveness probe -- it does not deliver a signal, just
+        // checks whether the kernel still tracks the pid for our uid.
+        process.kill(pid, 0);
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Process exited within the grace window.
       }
     }
   };
