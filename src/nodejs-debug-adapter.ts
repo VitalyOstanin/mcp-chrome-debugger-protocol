@@ -273,7 +273,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     try {
       await this.cdpTransport.sendCommand(
         "Runtime.addBinding",
-        { name: "__mcpLogPoint" } as unknown as Record<string, unknown>,
+        { name: "__mcpLogPoint" },
       );
     } catch (error) {
       this.sendEvent(
@@ -359,7 +359,7 @@ export class NodeJSDebugAdapter extends DebugSession {
           if (this.cdpTransport) {
             void this.cdpTransport.sendCommand(
               "Runtime.addBinding",
-              { name: "__mcpLogPoint", executionContextId: params.context.id } as unknown as Record<string, unknown>,
+              { name: "__mcpLogPoint", executionContextId: params.context.id },
             );
           }
         } catch {
@@ -421,7 +421,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       };
     }
 
-    let reason = 'pause';
+    let reason: string;
 
     // Map CDP pause reasons to DAP stopped reasons
     switch (params.reason) {
@@ -431,13 +431,10 @@ export class NodeJSDebugAdapter extends DebugSession {
         break;
       case 'other':
         // Check if it's actually a breakpoint hit
-        if (params.hitBreakpoints && params.hitBreakpoints.length > 0) {
-          reason = 'breakpoint';
-        } else {
-          reason = 'pause';
-        }
+        reason = params.hitBreakpoints && params.hitBreakpoints.length > 0 ? 'breakpoint' : 'pause';
         break;
       case 'debugCommand':
+      case 'step':
         reason = 'step';
         break;
       case 'DOM':
@@ -494,7 +491,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       const total = Math.max(clientLines.length, sourceBreakpoints.length);
 
       for (let i = 0; i < total; i++) {
-        const sourceBreakpoint = sourceBreakpoints[i] ?? ({ line: clientLines[i] } as DebugProtocol.SourceBreakpoint);
+        const sourceBreakpoint = sourceBreakpoints[i] ?? ({ line: clientLines[i] });
         const line = clientLines[i] ?? sourceBreakpoint.line;
         // Use 1-based default column to satisfy source map resolution (resolver rejects 0)
         const column = sourceBreakpoint.column ?? 1;
@@ -566,7 +563,7 @@ export class NodeJSDebugAdapter extends DebugSession {
                   const possible =
                     await this.cdpTransport!.sendCommand<Protocol.Debugger.GetPossibleBreakpointsResponse>(
                       "Debugger.getPossibleBreakpoints",
-                      { start, end, restrictToFunction: false } as unknown as Record<string, unknown>,
+                      { start, end, restrictToFunction: false },
                     );
                   const locs = possible.locations;
 
@@ -601,13 +598,13 @@ export class NodeJSDebugAdapter extends DebugSession {
 
                   const setResp = await this.cdpTransport.sendCommand<Protocol.Debugger.SetBreakpointResponse>(
                     "Debugger.setBreakpoint",
-                    { location: chosen, condition: breakpointCondition } as unknown as Record<string, unknown>,
+                    { location: chosen, condition: breakpointCondition },
                   );
 
                   cdpResult = {
                     breakpointId: setResp.breakpointId,
                     locations: [setResp.actualLocation],
-                  } as unknown as Protocol.Debugger.SetBreakpointByUrlResponse;
+                  };
                   // Update targetLine/Column for better reporting
                   targetLine = setResp.actualLocation.lineNumber + 1;
                   targetColumn = (setResp.actualLocation.columnNumber ?? chosen.columnNumber ?? 0) + 1;
@@ -676,7 +673,7 @@ export class NodeJSDebugAdapter extends DebugSession {
           (actualBp as unknown as DebugProtocol.Breakpoint).source = {
             name: path.split("/").pop(),
             path,
-          } as unknown as DebugProtocol.Source;
+          };
           // Provide numeric id for DAP response consumers
           (actualBp as unknown as DebugProtocol.Breakpoint).id = this.nextBreakpointId++;
 
@@ -709,7 +706,7 @@ export class NodeJSDebugAdapter extends DebugSession {
           (actualBp as unknown as DebugProtocol.Breakpoint).source = {
             name: path.split("/").pop(),
             path,
-          } as unknown as DebugProtocol.Source;
+          };
           (actualBp as unknown as DebugProtocol.Breakpoint).id = this.nextBreakpointId++;
 
           actualBreakpoints.push(actualBp);
@@ -1541,6 +1538,6 @@ export class NodeJSDebugAdapter extends DebugSession {
       success: true,
     };
 
-    await this.disconnectRequest(response, {} as DebugProtocol.DisconnectArguments);
+    await this.disconnectRequest(response, {});
   }
 }

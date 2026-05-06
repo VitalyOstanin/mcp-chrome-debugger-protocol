@@ -64,7 +64,7 @@ export class DebuggerTestHelper {
 
         result = await this.mcpClient.callTool("attach", { address: "localhost", port });
       } catch (error) {
-        throw new Error(`Failed to connect to debugger on port ${port}: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`Failed to connect to debugger on port ${port}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
       }
     } else if (port === 9229) {
       // For default port, use connect_default
@@ -164,7 +164,7 @@ export class DebuggerTestHelper {
         return breakpointData;
       }
     } catch (error) {
-      throw new Error(`Failed to parse breakpoint response: ${error}`);
+      throw new Error(`Failed to parse breakpoint response: ${error}`, { cause: error });
     }
   }
 
@@ -208,7 +208,7 @@ export class DebuggerTestHelper {
         return logpointData;
       }
     } catch (error) {
-      throw new Error(`Failed to parse logpoint response: ${error}`);
+      throw new Error(`Failed to parse logpoint response: ${error}`, { cause: error });
     }
   }
 
@@ -229,7 +229,7 @@ export class DebuggerTestHelper {
         throw new Error(response.message ?? response.error);
       }
     } catch (error) {
-      throw new Error(`Failed to parse remove breakpoint response: ${error}`);
+      throw new Error(`Failed to parse remove breakpoint response: ${error}`, { cause: error });
     }
   }
 
@@ -266,7 +266,7 @@ export class DebuggerTestHelper {
     try {
       return JSON.parse(result.content[0].text);
     } catch (error) {
-      throw new Error(`Failed to parse evaluation result: ${error}`);
+      throw new Error(`Failed to parse evaluation result: ${error}`, { cause: error });
     }
   }
 
@@ -280,7 +280,7 @@ export class DebuggerTestHelper {
     try {
       return JSON.parse(result.content[0].text);
     } catch (error) {
-      throw new Error(`Failed to parse call stack: ${error}`);
+      throw new Error(`Failed to parse call stack: ${error}`, { cause: error });
     }
   }
 
@@ -296,7 +296,7 @@ export class DebuggerTestHelper {
     try {
       return JSON.parse(result.content[0].text);
     } catch (error) {
-      throw new Error(`Failed to parse scope variables: ${error}`);
+      throw new Error(`Failed to parse scope variables: ${error}`, { cause: error });
     }
   }
 
@@ -343,7 +343,7 @@ export class DebuggerTestHelper {
     try {
       return JSON.parse(result.content[0].text);
     } catch (error) {
-      throw new Error(`Failed to parse logpoint hits: ${error}`);
+      throw new Error(`Failed to parse logpoint hits: ${error}`, { cause: error });
     }
   }
 
@@ -363,7 +363,7 @@ export class DebuggerTestHelper {
 
       return response.events ?? [];
     } catch (error) {
-      throw new Error(`Failed to parse debugger events: ${error}`);
+      throw new Error(`Failed to parse debugger events: ${error}`, { cause: error });
     }
   }
 

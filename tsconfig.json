@@ -16,11 +16,7 @@
     "allowSyntheticDefaultImports": true,
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
-    "resolveJsonModule": true,
-    "baseUrl": "./",
-    "paths": {
-      "*/protocol-requirements": ["./generated/protocol-requirements"]
-    }
+    "resolveJsonModule": true
   },
   "include": [
     "src/**/*"

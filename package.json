@@ -3,7 +3,7 @@
   "version": "1.2.0",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "main": "dist/index.js",
   "bin": {
@@ -28,7 +28,7 @@
     "lint:fix": "eslint . --fix",
     "prepublishOnly": "npm run build"
   },
-  "author": "Vitaly Ostanin <vitaly.ostanin@mail.ru>",
+  "author": "Vitaly Ostanin <vitaly.ostanin@gmail.com>",
   "license": "MIT",
   "description": "MCP server for Chrome debugger protocol (Node.js)",
   "keywords": [
@@ -55,31 +55,34 @@
     "README.md"
   ],
   "dependencies": {
-    "@jridgewell/trace-mapping": "^0.3.29",
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@jridgewell/trace-mapping": "^0.3.31",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/ws": "^8.18.1",
     "@vscode/debugadapter": "^1.68.0",
     "@vscode/debugprotocol": "^1.68.0",
-    "chrome-remote-interface": "^0.33.3",
-    "ws": "^8.18.3",
-    "zod": "^3.25.76"
+    "chrome-remote-interface": "^0.34.0",
+    "ws": "^8.20.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "express": "^4.19.0",
-    "get-port": "^7.1.0",
-    "@types/chrome-remote-interface": "^0.31.14",
-    "@types/jest": "^29.5.14",
-    "@types/node": "^22.0.0",
-    "@typescript-eslint/eslint-plugin": "^8.0.0",
-    "@typescript-eslint/parser": "^8.0.0",
-    "@vitalyostanin/eslint-prefer-de-morgan-law": "^1.0.2",
-    "eslint": "^9.0.0",
-    "jest": "^29.0.0",
-    "ts-jest": "^29.0.0",
-    "typescript": "^5.5.0",
-    "typescript-eslint": "^8.38.0"
+    "@eslint/js": "^10.0.1",
+    "@types/chrome-remote-interface": "^0.33.0",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^25.6.0",
+    "@typescript-eslint/eslint-plugin": "^8.59.2",
+    "@typescript-eslint/parser": "^8.59.2",
+    "eslint": "^10.3.0",
+    "express": "^5.2.1",
+    "get-port": "^7.2.0",
+    "jest": "^30.3.0",
+    "ts-jest": "^29.4.9",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.2"
   },
   "publishConfig": {
     "access": "public"
+  },
+  "overrides": {
+    "ip-address": "^10.2.0"
   }
 }

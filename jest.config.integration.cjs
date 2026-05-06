@@ -4,7 +4,7 @@ module.exports = {
   roots: ['<rootDir>/tests'],
   testMatch: ['**/tests/**/*.test.ts'],
   transform: {
-    '^.+\\.ts$': 'ts-jest',
+    '^.+\\.ts$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.test.json' }],
   },
   collectCoverageFrom: [
     'src/**/*.ts',

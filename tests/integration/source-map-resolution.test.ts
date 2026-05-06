@@ -419,14 +419,21 @@ describe('resolveGeneratedPosition', () => {
 
   describe('coordinate validation', () => {
     // Schema enforcement happens at the MCP server boundary (Zod, min(1) on lineNumberSchema /
-    // columnNumberSchema). Invalid coordinates therefore surface as protocol-level rejections —
-    // the SDK throws an McpError on the client. The runtime guards inside SourceMapResolver still
-    // exist as a defence-in-depth check but are no longer reachable through MCP.
+    // columnNumberSchema). Starting with @modelcontextprotocol/sdk 1.25+ validation errors are
+    // returned as a tool result with isError=true (instead of throwing on the client). The runtime
+    // guards inside SourceMapResolver still exist as a defence-in-depth check but are no longer
+    // reachable through MCP.
     async function expectInvalidArgsRejection(
       tool: 'resolveOriginalPosition' | 'resolveGeneratedPosition',
       args: Record<string, unknown>,
     ): Promise<void> {
-      await expect(client.callTool(tool, args)).rejects.toThrow(/Invalid arguments|greater than or equal to 1/i);
+      const result = await client.callTool(tool, args);
+
+      expect(result.isError).toBe(true);
+
+      const text = (result.content as Array<{ text: string }>)[0]?.text ?? '';
+
+      expect(text).toMatch(/Invalid arguments|greater than or equal to 1|Too small/i);
     }
 
     it('should reject 0-based line numbers', async () => {

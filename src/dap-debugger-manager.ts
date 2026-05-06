@@ -98,8 +98,6 @@ export class DAPDebuggerManager {
     const jsonString = JSON.stringify(result, null, 2);
 
     if (jsonString.length > maxLength) {
-      truncated = true;
-
       return {
         result: {
           error: 'Response too large',

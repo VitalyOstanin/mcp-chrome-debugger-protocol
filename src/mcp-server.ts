@@ -798,7 +798,7 @@ export class NodeDebuggerMCPServer {
           program: z.string().describe("Path to the Node.js program to launch"),
           args: z.array(z.string()).optional().describe("Command line arguments for the program"),
           cwd: z.string().optional().describe("Working directory for the program"),
-          env: z.record(z.string()).optional().describe("Environment variables"),
+          env: z.record(z.string(), z.string()).optional().describe("Environment variables"),
         },
       },
       async ({ program, args, cwd, env }) => {

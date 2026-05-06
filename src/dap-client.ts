@@ -238,7 +238,7 @@ export class DAPClient extends EventEmitter {
                 request_seq: requestId,
                 command: 'attach',
                 success: true,
-              } as DebugProtocol.AttachResponse;
+              };
               break;
             }
             case 'launch':
