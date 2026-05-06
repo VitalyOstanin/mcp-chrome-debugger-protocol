@@ -1,5 +1,9 @@
 {
-  "extends": "./tsconfig.json",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
   "include": [
     "src/**/*",
     "tests/**/*",
@@ -10,10 +14,5 @@
     "node_modules",
     "dist",
     "tests/fixtures/test-app"
-  ],
-  "compilerOptions": {
-    "noEmit": true,
-    "rootDir": ".",
-    "types": ["node"]
-  }
+  ]
 }
