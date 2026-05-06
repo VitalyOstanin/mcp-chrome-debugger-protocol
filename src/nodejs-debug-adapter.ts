@@ -16,6 +16,12 @@ import { pathToFileURL } from 'node:url';
 import { CDPTransport, type CDPConnection } from './cdp-transport.js';
 import type { Protocol } from 'devtools-protocol';
 import { SourceMapResolver } from './source-map-resolver.js';
+import {
+  buildLogpointExpression,
+  extractLogpointPlaceholders,
+  lookupDottedPath,
+  renderLogpointMessage,
+} from './logpoint.js';
 
 export interface NodeJSLaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
   program: string;
@@ -926,37 +932,10 @@ export class NodeJSDebugAdapter extends DebugSession {
   }
 
   private createLogpointExpression(logMessage: string): string {
-    // Collect unique placeholder expressions inside {...}
-    const exprs = Array.from(new Set((logMessage.match(/\{([^}]+)\}/g) ?? [])
-      .map(m => m.slice(1, -1).trim())
-      .filter(Boolean)));
-    // Build safe per-expression evaluators to capture variables/expressions without throwing
-    const varsEntries = exprs.map(expr => {
-      const key = expr.replace(/"/g, '\\"');
-
-      // Use IIFE with try/catch to guard ReferenceErrors and other runtime errors
-      return `"${key}":(()=>{try{return ${expr}}catch(_){return undefined}})()`;
-    }).join(',');
-    // Build message template using __vars values instead of re-evaluating expressions.
-    // Escaping order matters:
-    //   1. backslash first  -- so subsequent passes don't double-escape inserted '\'
-    //   2. backtick         -- closes the template literal we wrap below
-    //   3. literal '$'      -- otherwise user-supplied "${...}" would be parsed as a
-    //                          template interpolation by the runtime (the regex below
-    //                          only handles bare "{...}" placeholders)
-    //   4. {expr} placeholders -> "${ ... }" referring to the precomputed __vars map
-    const tpl = logMessage
-      .replace(/\\/g, "\\\\")
-      .replace(/`/g, "\\`")
-      .replace(/\$/g, "\\$")
-      .replace(/\{([^}]+)\}/g, (_, expr: string) => {
-        const key = expr.trim().replace(/"/g, '\\"');
-
-        return `\${typeof __vars["${key}"]==="object"?JSON.stringify(__vars["${key}"]):__vars["${key}"]}`;
-      });
-
-    // Report via Runtime.addBinding binding with rich JSON payload; swallow errors; never pause (return false)
-    return `(()=>{try{const __vars={${varsEntries}};typeof __mcpLogPoint==='function'&&__mcpLogPoint(JSON.stringify({message:\`${tpl}\`,vars:__vars,time:Date.now()}))}catch(_){};return false})()`;
+    // Delegate to the shared logpoint helper so the runtime path and the
+    // simulated path stay observationally consistent (placeholder syntax,
+    // escaping order, error handling).
+    return buildLogpointExpression(logMessage);
   }
 
   // The DAP request handlers below (continueRequest/pauseRequest/...) remain as DebugSession
@@ -1516,39 +1495,17 @@ export class NodeJSDebugAdapter extends DebugSession {
     const logpoint = breakpoints.find((bp) => bp.line === line && bp.logMessage);
 
     if (logpoint?.logMessage) {
-      // Build message and vars similar to binding-based runtime path
-      const exprs = Array.from(new Set((logpoint.logMessage.match(/\{([^}]+)\}/g) ?? [])
-        .map(m => m.slice(1, -1).trim())
-        .filter(Boolean)));
+      // Mirror the runtime path: extract the same placeholders, resolve them
+      // against the provided static variables map, then render the message via
+      // the shared helper so this path stays observationally consistent.
+      const exprs = extractLogpointPlaceholders(logpoint.logMessage);
       const vars: Record<string, unknown> = {};
 
       for (const expr of exprs) {
-        try {
-          // simple dotted path lookup from provided variables
-          const parts = expr.split(".");
-          let value: unknown = variables;
-
-          for (const part of parts) {
-            value = (value as Record<string, unknown>)[part];
-          }
-          vars[expr] = value;
-        } catch {
-          vars[expr] = undefined;
-        }
+        vars[expr] = lookupDottedPath(expr, variables);
       }
 
-      const message = logpoint.logMessage
-        .replace(/`/g, "\\`")
-        .replace(/\{([^}]+)\}/g, (_m, expression) => {
-          try {
-            const key = String(expression);
-            const val = vars[key];
-
-            return String(val);
-          } catch {
-            return _m;
-          }
-        });
+      const message = renderLogpointMessage(logpoint.logMessage, vars);
       const payload = { message, vars, time: Date.now() };
 
       // Emit custom event like runtime binding path
