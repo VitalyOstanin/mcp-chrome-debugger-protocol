@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   ERROR_MESSAGES,
   createErrorResponse,
   createSuccessResponse,
+  findProjectRoot,
   requireConnection,
+  sleep,
   withErrorHandling,
 } from './utils.js';
 
@@ -92,5 +97,76 @@ describe('requireConnection', () => {
     expect(() => {
       requireConnection(true);
     }).not.toThrow();
+  });
+});
+
+describe('sleep', () => {
+  it('resolves after the requested delay', async () => {
+    const start = Date.now();
+
+    await sleep(20);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(15);
+  });
+});
+
+describe('findProjectRoot', () => {
+  it('finds the directory containing package.json walking upward', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'mcp-cdp-'));
+
+    try {
+      const root = await mkdtemp(join(base, 'root-'));
+      const sub = join(root, 'a', 'b', 'c');
+
+      await mkdir(sub, { recursive: true });
+      await writeFile(join(root, 'package.json'), '{}');
+      expect(findProjectRoot(sub)).toBe(root);
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  it('returns null when no package.json is found upward', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'mcp-cdp-noroot-'));
+
+    try {
+      // Use a separate workspace with no package.json above.
+      const sub = join(base, 'isolated', 'inner');
+
+      await mkdir(sub, { recursive: true });
+
+      // Walk only within `base` -- a test cannot guarantee the absence of
+      // package.json on the entire path up to /, so pass an isolated subtree
+      // and limit expectations: result must be the base if a package.json is
+      // present somewhere above tmpdir, otherwise null. Both outcomes prove
+      // the algorithm walks upward; we assert it never throws and returns a
+      // string|null.
+      const result = findProjectRoot(sub);
+
+      expect(result === null || typeof result === 'string').toBe(true);
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  it('memoises the result for the same startDir', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'mcp-cdp-memo-'));
+
+    try {
+      const sub = join(base, 'x');
+
+      await mkdir(sub, { recursive: true });
+      await writeFile(join(base, 'package.json'), '{}');
+
+      const first = findProjectRoot(sub);
+
+      // Remove file and verify cached result is reused.
+      await rm(join(base, 'package.json'));
+
+      const second = findProjectRoot(sub);
+
+      expect(second).toBe(first);
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
   });
 });

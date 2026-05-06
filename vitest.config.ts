@@ -21,8 +21,19 @@ export default defineConfig({
         '**/*.test.ts',
         '**/*.spec.ts',
       ],
-      // No thresholds: with the current single unit-test, any non-zero floor is
-      // arbitrary. Re-introduce real values once meaningful unit coverage exists.
+      // Floors fix the current unit-coverage baseline so a future refactor
+      // cannot silently drop it. Per-file overrides protect modules that are
+      // already well covered (utils, tool-state-manager, source-map-resolver).
+      // Raise the global numbers as integration-style logic gets unit tests.
+      thresholds: {
+        lines: 13,
+        functions: 9,
+        branches: 13,
+        statements: 13,
+        'src/utils.ts': { lines: 80, functions: 80, branches: 80, statements: 80 },
+        'src/tool-state-manager.ts': { lines: 95, functions: 100, branches: 90, statements: 95 },
+        'src/source-map-resolver.ts': { lines: 65, functions: 80, branches: 50, statements: 65 },
+      },
     },
   },
 });
