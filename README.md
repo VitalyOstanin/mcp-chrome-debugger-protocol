@@ -86,6 +86,12 @@ claude mcp remove chrome-debugger-protocol --scope user
 - `--scope user`: Remove from user configuration
 - `--scope project`: Remove from project configuration
 
+## Security notes
+
+- `node --inspect` binds the inspector to `127.0.0.1` by default (since Node 7+). Never run it as `--inspect=0.0.0.0` on a multi-tenant or network-exposed host: the V8 inspector exposes `Runtime.evaluate`, which is unauthenticated arbitrary code execution against the debuggee.
+- The MCP server attaches over WebSocket to `localhost`. To debug a remote process, tunnel via SSH (`ssh -L 9229:127.0.0.1:9229 host`) instead of opening port 9229 to the network.
+- Both the `evaluate` tool and breakpoint `condition` / `logMessage` placeholders execute arbitrary JavaScript in the debuggee process by design. Treat any MCP client connected to this server as if it had full code execution rights inside the target Node.js process.
+
 ## Quick Start
 
 1. **Start your Node.js application with debugger:**
