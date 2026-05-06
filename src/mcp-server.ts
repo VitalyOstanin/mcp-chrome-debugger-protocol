@@ -241,9 +241,9 @@ export class NodeDebuggerMCPServer {
           port: portSchema.optional().default(DEFAULTS.INSPECTOR_PORT).describe(`Debug port (default: ${DEFAULTS.INSPECTOR_PORT})`),
           address: z.string().optional().default(DEFAULTS.INSPECTOR_CLIENT_HOST).describe(`Debug address (default: ${DEFAULTS.INSPECTOR_CLIENT_HOST})`),
           processId: z.number().int().min(1).optional().describe("Process ID to attach to"),
-          discoverTimeoutMs: z.number().int().min(0).optional().default(DEFAULTS.DISCOVER_TIMEOUT_MS).describe("Max time to discover inspector port (ms). 0 means do not poll."),
-          probeTimeoutMs: z.number().int().min(0).optional().default(DEFAULTS.PROBE_TIMEOUT_MS).describe("Timeout for /json/version probe (ms)"),
-          ports: z.array(portSchema).optional().describe(`Explicit list of ports to probe when enabling by PID (defaults ${INSPECTOR_PORT_RANGE.start}..${INSPECTOR_PORT_RANGE.end}). Pass [] to disable probing.`),
+          discoverTimeoutMs: z.number().int().min(0).optional().default(DEFAULTS.DISCOVER_TIMEOUT_MS).describe(`Max time (ms) to poll for the inspector port after sending SIGUSR1. 0 disables polling entirely (deadline = now), so attach returns immediately if strace did not detect the port. Pair with explicit ports=[] when you only want strace-based detection. Default ${DEFAULTS.DISCOVER_TIMEOUT_MS}.`),
+          probeTimeoutMs: z.number().int().min(0).optional().default(DEFAULTS.PROBE_TIMEOUT_MS).describe(`Timeout (ms) for a single /json/version HTTP probe inside the polling loop. 0 collapses each probe round to "fail immediately"; the loop still iterates until discoverTimeoutMs elapses. Default ${DEFAULTS.PROBE_TIMEOUT_MS}.`),
+          ports: z.array(portSchema).optional().describe(`Explicit list of ports to probe when enabling by PID (defaults ${INSPECTOR_PORT_RANGE.start}..${INSPECTOR_PORT_RANGE.end}). Pass [] to disable probing entirely (no polling) — useful when you only want strace detection or when discoverTimeoutMs is 0.`),
         },
       },
       async ({

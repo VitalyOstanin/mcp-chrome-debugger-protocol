@@ -3,11 +3,9 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  ERROR_MESSAGES,
   createErrorResponse,
   createSuccessResponse,
   findProjectRoot,
-  requireConnection,
   sleep,
   withErrorHandling,
 } from './utils.js';
@@ -83,20 +81,6 @@ describe('withErrorHandling', () => {
     const parsed = JSON.parse(response.content[0]!.text);
 
     expect(parsed.message).toBe('plain string');
-  });
-});
-
-describe('requireConnection', () => {
-  it('throws when not connected', () => {
-    expect(() => {
-      requireConnection(false);
-    }).toThrow(ERROR_MESSAGES.NOT_CONNECTED);
-  });
-
-  it('does nothing when connected', () => {
-    expect(() => {
-      requireConnection(true);
-    }).not.toThrow();
   });
 });
 

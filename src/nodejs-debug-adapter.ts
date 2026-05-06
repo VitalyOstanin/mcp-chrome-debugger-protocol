@@ -1214,6 +1214,15 @@ export class NodeJSDebugAdapter extends DebugSession {
   }
 
   public scopes(args: DebugProtocol.ScopesArguments): DebugProtocol.ScopesResponse {
+    // currentCallFrames is only populated by Debugger.paused. If the debuggee
+    // is running, return an empty scopes list (with a clear name) instead of
+    // throwing "Frame N not found" — the latter masks the real reason.
+    if (this.currentCallFrames.length === 0) {
+      return this.okResponse<DebugProtocol.ScopesResponse>('scopes', {
+        scopes: [{ name: '(debuggee not paused)', variablesReference: 0, expensive: false }],
+      });
+    }
+
     if (args.frameId < 0 || args.frameId >= this.currentCallFrames.length) {
       throw new Error(`Frame ${args.frameId} not found`);
     }

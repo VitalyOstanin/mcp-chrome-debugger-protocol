@@ -4,15 +4,6 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 /**
- * Canonical error strings reused across MCP tools so wording stays consistent
- * in client-visible responses and unit tests can assert on a stable value.
- */
-export const ERROR_MESSAGES = {
-  NOT_CONNECTED: "Not connected to debugger",
-  CONNECTION_REQUIRED: "Use attach first to connect to the debugger.",
-} as const;
-
-/**
  * Wire-format envelope for every MCP tool response. The single `text` chunk
  * carries the JSON-stringified ToolResponse; clients parse it back into
  * SuccessResponse | ErrorResponse.
@@ -118,17 +109,6 @@ export async function withErrorHandling<T>(
       'OPERATION_FAILED',
       context,
     );
-  }
-}
-
-/**
- * Throw the canonical NOT_CONNECTED error if the debugger is not attached.
- * Use at the top of any tool handler that requires a live DAP/CDP session
- * before doing real work.
- */
-export function requireConnection(isConnected: boolean): void {
-  if (!isConnected) {
-    throw new Error(ERROR_MESSAGES.NOT_CONNECTED);
   }
 }
 
