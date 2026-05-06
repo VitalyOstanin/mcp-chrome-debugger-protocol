@@ -10,6 +10,7 @@ import {
 } from '@vscode/debugadapter';
 import type { DebugProtocol } from '@vscode/debugprotocol';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { CDPTransport, type CDPConnection } from './cdp-transport.js';
 import type { Protocol } from 'devtools-protocol';
 import { SourceMapResolver } from './source-map-resolver.js';
@@ -65,6 +66,7 @@ export class NodeJSDebugAdapter extends DebugSession {
   private readonly variableHandles = new Map<number, VariableHandle>();
   private nextVariableHandleId = 1;
   private lastException: Protocol.Runtime.ExceptionDetails | null = null;
+  private nextExceptionId = 1;
   private exceptionPauseState: 'none' | 'uncaught' | 'all' = 'none';
 
   private async getScriptIdForPath(targetPath: string, timeoutMs = 1000): Promise<string | undefined> {
@@ -75,7 +77,7 @@ export class NodeJSDebugAdapter extends DebugSession {
 
     while (!scriptId && Date.now() < deadline) {
       // Small delay to allow scriptParsed events to arrive after Debugger.enable
-      await new Promise((r) => setTimeout(r, 50));
+      await sleep(50);
       scriptId = tryGet();
     }
 
@@ -407,16 +409,24 @@ export class NodeJSDebugAdapter extends DebugSession {
     this.nextVariableHandleId = 1;
 
     if (params.reason === 'exception' || params.reason === 'promiseRejection') {
-      const data = params.data as Protocol.Runtime.RemoteObject | undefined;
+      // Prefer the richer payload from Runtime.exceptionThrown if it arrived first
+      // (it carries stackTrace/scriptId from CDP). Only synthesize from the call
+      // frame when nothing has been recorded yet.
+      if (!this.lastException) {
+        const data = params.data as Protocol.Runtime.RemoteObject | undefined;
+        const top = this.currentCallFrames[0].location;
 
-      this.lastException = {
-        exceptionId: 0,
-        text: data?.description ?? 'Exception',
-        lineNumber: this.currentCallFrames[0]?.location.lineNumber ?? 0,
-        columnNumber: this.currentCallFrames[0]?.location.columnNumber ?? 0,
-        scriptId: this.currentCallFrames[0]?.location.scriptId,
-        exception: data,
-      };
+        // Convert CDP 0-based coordinates to MCP/DAP 1-based at storage time so
+        // exceptionInfo never has to remember which frame stored what.
+        this.lastException = {
+          exceptionId: this.nextExceptionId++,
+          text: data?.description ?? 'Exception',
+          lineNumber: top.lineNumber + 1,
+          columnNumber: (top.columnNumber ?? 0) + 1,
+          scriptId: top.scriptId,
+          exception: data,
+        };
+      }
     }
 
     let reason: string;

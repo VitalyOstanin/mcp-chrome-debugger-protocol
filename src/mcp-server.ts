@@ -632,7 +632,7 @@ export class NodeDebuggerMCPServer {
         title: "Resolve Generated Position",
         description: "Map from original TypeScript source location to compiled JavaScript location using source maps",
         inputSchema: {
-          originalSource: z.string().describe("Original TypeScript source file name (as it appears in source map)"),
+          originalSource: z.string().min(1).describe("Original TypeScript source file name (as it appears in source map)"),
           originalLine: lineNumberSchema.describe("Line number in original TypeScript source file (1-based)"),
           originalColumn: columnNumberSchema.describe("Column number in original TypeScript source file (1-based)"),
           sourceMapPaths: z.array(z.string()).optional().describe("Optional array of .map file paths (defaults to build directory search)"),

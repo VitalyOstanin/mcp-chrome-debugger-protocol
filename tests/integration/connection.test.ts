@@ -64,6 +64,8 @@ describe("MCP Chrome Debugger Protocol - Connection Tests", () => {
   });
 
   describe("attach with default port", () => {
+    // TODO: rework to dynamically allocate a port and stub DEFAULTS.INSPECTOR_PORT,
+    // or move to an isolated env so port 9229 cannot conflict with concurrent runs.
     it.skip("should connect to default debugger port (9229)", async () => {
       // This test is disabled because it requires a debugger running on fixed port 9229,
       // which we don't want to do by default in tests to avoid port conflicts.

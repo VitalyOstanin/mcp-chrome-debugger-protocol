@@ -7,6 +7,7 @@ import { createSuccessResponse, createErrorResponse, type MCPResponse } from './
 import { DEFAULTS, INSPECTOR_PORT_RANGE } from './constants.js';
 import { kill } from 'node:process';
 import { spawn } from 'node:child_process';
+import { setTimeout as sleep } from 'node:timers/promises';
 import http from 'node:http';
 
 // Bounded FIFO buffer with O(1) push and amortised O(1) drop-oldest. The previous
@@ -129,11 +130,11 @@ export class DAPClient extends EventEmitter {
         this.handleOutputEvent(outputEvent);
       } else if (event.event === 'mcpLogpoint') {
         // Custom event from NodeJSDebugAdapter carrying bindingCalled payloads
-        const McpLogpointEventBody = z.object({
+        const McpLogpointEventBody = z.looseObject({
           executionContextId: z.number().optional(),
           name: z.string().optional(),
           payload: z.string().optional(),
-        }).passthrough();
+        });
         const parsedBody = McpLogpointEventBody.safeParse(event.body);
 
         if (!parsedBody.success) {
@@ -559,7 +560,7 @@ export class DAPClient extends EventEmitter {
 
         if (ok) return cand;
       }
-      await new Promise((r) => setTimeout(r, 200));
+      await sleep(200);
     }
 
     return undefined;

@@ -57,6 +57,11 @@ flowchart LR
 - [Animated SVG](demo-ts-mcp-chrome-debugger-protocol.svg)  
 - [Original asciinema recording](https://asciinema.org/a/CgygsuhpDtOIHV7QPFr6VWU7D)
 
+## Requirements
+
+- Node.js >= 22 (matches `engines.node` in `package.json`; CI runs Node 22 and 24).
+- npm >= 11 (only required when publishing).
+
 ## Installation
 
 Install using Claude MCP CLI:
@@ -99,6 +104,24 @@ claude mcp remove chrome-debugger-protocol --scope user
 ```
 
 Tip: use the `attach` tool to connect; set a logpoint via `setBreakpoints` (pass a breakpoint with `logMessage`), then inspect hits with `getLogpointHits`.
+
+Need a target app? The repo ships a tiny Express test app at [`tests/fixtures/test-app`](tests/fixtures/test-app) with a `/test1` endpoint that you can launch under `--inspect` to follow the prompt above end-to-end.
+
+## Development
+
+Local workflow for contributors:
+
+```bash
+npm install
+npm run build              # tsc → dist/
+npm run lint               # eslint .
+npm run lint:fix           # eslint . --fix
+npm test                   # vitest unit tests
+npm run test:integration   # vitest integration tests (real Node debugger)
+npm run dev                # build + run server in dev loop
+```
+
+See [AGENTS.md](AGENTS.md) for detailed contributor rules and project conventions.
 
 ## Available Tools
 
