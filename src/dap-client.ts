@@ -354,27 +354,39 @@ export class DAPClient extends EventEmitter {
 
   // ===== Response builders for in-process DAP commands =====
 
-  private buildInitializeResponse(requestId: number): DebugProtocol.InitializeResponse {
-    return {
+  // Mirror NodeJSDebugAdapter#okResponse: factor out the canonical successful
+  // DAP envelope so the wire format only has to change in one place.
+  private okResponse<R extends DebugProtocol.Response>(
+    requestId: number,
+    command: R['command'],
+    body?: R['body'],
+  ): R {
+    const result: DebugProtocol.Response = {
       seq: 0,
       type: 'response',
       request_seq: requestId,
-      command: 'initialize',
+      command,
       success: true,
-      body: {
-        supportsConfigurationDoneRequest: true,
-        supportsEvaluateForHovers: true,
-        supportsLogPoints: true,
-        supportsConditionalBreakpoints: true,
-        supportsHitConditionalBreakpoints: true,
-        supportsSetVariable: true,
-        supportsCompletionsRequest: true,
-        supportsRestartFrame: true,
-        supportsLoadedSourcesRequest: true,
-        supportsExceptionInfoRequest: true,
-        supportsBreakpointLocationsRequest: true,
-      },
+      ...(body !== undefined ? { body } : {}),
     };
+
+    return result as unknown as R;
+  }
+
+  private buildInitializeResponse(requestId: number): DebugProtocol.InitializeResponse {
+    return this.okResponse<DebugProtocol.InitializeResponse>(requestId, 'initialize', {
+      supportsConfigurationDoneRequest: true,
+      supportsEvaluateForHovers: true,
+      supportsLogPoints: true,
+      supportsConditionalBreakpoints: true,
+      supportsHitConditionalBreakpoints: true,
+      supportsSetVariable: true,
+      supportsCompletionsRequest: true,
+      supportsRestartFrame: true,
+      supportsLoadedSourcesRequest: true,
+      supportsExceptionInfoRequest: true,
+      supportsBreakpointLocationsRequest: true,
+    });
   }
 
   // launch is not supported in this build (we always attach to a running process).

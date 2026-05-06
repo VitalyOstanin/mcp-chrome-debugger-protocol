@@ -78,6 +78,25 @@ export class NodeJSDebugAdapter extends DebugSession {
     if (!this.verboseDiagnostics) return;
     this.sendEvent(new OutputEvent(message, "console"));
   }
+
+  // Build a successful DAP response shell with the canonical envelope. The
+  // adapter does not own the request_seq/seq counters in this build, so they
+  // stay at 0 -- DAPClient overwrites request_seq on the wire when needed.
+  private okResponse<R extends DebugProtocol.Response>(
+    command: R['command'],
+    body?: R['body'],
+  ): R {
+    const result: DebugProtocol.Response = {
+      seq: 0,
+      type: 'response',
+      request_seq: 0,
+      command,
+      success: true,
+      ...(body !== undefined ? { body } : {}),
+    };
+
+    return result as unknown as R;
+  }
   private currentCallFrames: Protocol.Debugger.CallFrame[] = [];
   private readonly variableHandles = new Map<number, VariableHandle>();
   private nextVariableHandleId = 1;
@@ -1109,77 +1128,41 @@ export class NodeJSDebugAdapter extends DebugSession {
     void args;
     await this.requireTransport().sendCommand('Debugger.resume');
 
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'continue',
-      success: true,
-      body: { allThreadsContinued: true },
-    };
+    return this.okResponse<DebugProtocol.ContinueResponse>('continue', { allThreadsContinued: true });
   }
 
   public async pauseExecution(args?: DebugProtocol.PauseArguments): Promise<DebugProtocol.PauseResponse> {
     void args;
     await this.requireTransport().sendCommand('Debugger.pause');
 
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'pause',
-      success: true,
-    };
+    return this.okResponse<DebugProtocol.PauseResponse>('pause');
   }
 
   public async stepIn(args?: DebugProtocol.StepInArguments): Promise<DebugProtocol.StepInResponse> {
     void args;
     await this.requireTransport().sendCommand('Debugger.stepInto');
 
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'stepIn',
-      success: true,
-    };
+    return this.okResponse<DebugProtocol.StepInResponse>('stepIn');
   }
 
   public async stepOut(args?: DebugProtocol.StepOutArguments): Promise<DebugProtocol.StepOutResponse> {
     void args;
     await this.requireTransport().sendCommand('Debugger.stepOut');
 
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'stepOut',
-      success: true,
-    };
+    return this.okResponse<DebugProtocol.StepOutResponse>('stepOut');
   }
 
   public async next(args?: DebugProtocol.NextArguments): Promise<DebugProtocol.NextResponse> {
     void args;
     await this.requireTransport().sendCommand('Debugger.stepOver');
 
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'next',
-      success: true,
-    };
+    return this.okResponse<DebugProtocol.NextResponse>('next');
   }
 
   public threads(): DebugProtocol.ThreadsResponse {
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'threads',
-      success: true,
-      body: { threads: [new Thread(NodeJSDebugAdapter.THREAD_ID, 'Main Thread')] },
-    };
+    return this.okResponse<DebugProtocol.ThreadsResponse>('threads', {
+      threads: [new Thread(NodeJSDebugAdapter.THREAD_ID, 'Main Thread')],
+    });
   }
 
   public stackTrace(args: DebugProtocol.StackTraceArguments): DebugProtocol.StackTraceResponse {
@@ -1203,14 +1186,10 @@ export class NodeJSDebugAdapter extends DebugSession {
       };
     });
 
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'stackTrace',
-      success: true,
-      body: { stackFrames, totalFrames: this.currentCallFrames.length },
-    };
+    return this.okResponse<DebugProtocol.StackTraceResponse>('stackTrace', {
+      stackFrames,
+      totalFrames: this.currentCallFrames.length,
+    });
   }
 
   public scopes(args: DebugProtocol.ScopesArguments): DebugProtocol.ScopesResponse {
@@ -1237,14 +1216,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       };
     });
 
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'scopes',
-      success: true,
-      body: { scopes: dapScopes },
-    };
+    return this.okResponse<DebugProtocol.ScopesResponse>('scopes', { scopes: dapScopes });
   }
 
   public async variables(args: DebugProtocol.VariablesArguments): Promise<DebugProtocol.VariablesResponse> {
@@ -1257,14 +1229,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     const {objectId} = handle;
 
     if (objectId === undefined) {
-      return {
-        seq: 0,
-        type: 'response',
-        request_seq: 0,
-        command: 'variables',
-        success: true,
-        body: { variables: [] },
-      };
+      return this.okResponse<DebugProtocol.VariablesResponse>('variables', { variables: [] });
     }
 
     const result = await this.requireTransport().sendCommand<Protocol.Runtime.GetPropertiesResponse>(
@@ -1292,14 +1257,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         };
       });
 
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'variables',
-      success: true,
-      body: { variables },
-    };
+    return this.okResponse<DebugProtocol.VariablesResponse>('variables', { variables });
   }
 
   public async evaluate(args: DebugProtocol.EvaluateArguments): Promise<DebugProtocol.EvaluateResponse> {
@@ -1350,18 +1308,11 @@ export class NodeJSDebugAdapter extends DebugSession {
       ? this.allocateHandle({ kind: 'object', objectId: remote.objectId })
       : 0;
 
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'evaluate',
-      success: true,
-      body: {
-        result: this.remoteObjectToString(remote),
-        type: remote.type,
-        variablesReference: reference,
-      },
-    };
+    return this.okResponse<DebugProtocol.EvaluateResponse>('evaluate', {
+      result: this.remoteObjectToString(remote),
+      type: remote.type,
+      variablesReference: reference,
+    });
   }
 
   public async setVariable(
@@ -1412,18 +1363,11 @@ export class NodeJSDebugAdapter extends DebugSession {
       ? this.allocateHandle({ kind: 'object', objectId: evalResult.result.objectId })
       : 0;
 
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'setVariable',
-      success: true,
-      body: {
-        value: this.remoteObjectToString(evalResult.result),
-        type: evalResult.result.type,
-        variablesReference: childRef,
-      },
-    };
+    return this.okResponse<DebugProtocol.SetVariableResponse>('setVariable', {
+      value: this.remoteObjectToString(evalResult.result),
+      type: evalResult.result.type,
+      variablesReference: childRef,
+    });
   }
 
   public loadedSources(): DebugProtocol.LoadedSourcesResponse {
@@ -1444,14 +1388,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       });
     }
 
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'loadedSources',
-      success: true,
-      body: { sources },
-    };
+    return this.okResponse<DebugProtocol.LoadedSourcesResponse>('loadedSources', { sources });
   }
 
   public exceptionInfo(args: DebugProtocol.ExceptionInfoArguments): DebugProtocol.ExceptionInfoResponse {
@@ -1463,18 +1400,11 @@ export class NodeJSDebugAdapter extends DebugSession {
       throw new Error('No exception information available');
     }
 
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'exceptionInfo',
-      success: true,
-      body: {
-        exceptionId: String(ex.exceptionId),
-        description: ex.exception?.description ?? ex.text,
-        breakMode: this.exceptionPauseState === 'all' ? 'always' : 'unhandled',
-      },
-    };
+    return this.okResponse<DebugProtocol.ExceptionInfoResponse>('exceptionInfo', {
+      exceptionId: String(ex.exceptionId),
+      description: ex.exception?.description ?? ex.text,
+      breakMode: this.exceptionPauseState === 'all' ? 'always' : 'unhandled',
+    });
   }
 
   public async setExceptionBreakpoints(
@@ -1492,14 +1422,9 @@ export class NodeJSDebugAdapter extends DebugSession {
     await this.requireTransport().sendCommand('Debugger.setPauseOnExceptions', { state });
     this.exceptionPauseState = state;
 
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'setExceptionBreakpoints',
-      success: true,
-      body: { breakpoints: filters.map(() => ({ verified: true })) },
-    };
+    return this.okResponse<DebugProtocol.SetExceptionBreakpointsResponse>('setExceptionBreakpoints', {
+      breakpoints: filters.map(() => ({ verified: true })),
+    });
   }
 
   public async breakpointLocations(
@@ -1509,14 +1434,9 @@ export class NodeJSDebugAdapter extends DebugSession {
     const scriptId = await this.getScriptIdForPath(path, 200);
 
     if (!scriptId) {
-      return {
-        seq: 0,
-        type: 'response',
-        request_seq: 0,
-        command: 'breakpointLocations',
-        success: true,
-        body: { breakpoints: [] },
-      };
+      return this.okResponse<DebugProtocol.BreakpointLocationsResponse>('breakpointLocations', {
+        breakpoints: [],
+      });
     }
 
     const transport = this.requireTransport();
@@ -1539,14 +1459,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       column: (loc.columnNumber ?? 0) + 1,
     }));
 
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'breakpointLocations',
-      success: true,
-      body: { breakpoints },
-    };
+    return this.okResponse<DebugProtocol.BreakpointLocationsResponse>('breakpointLocations', { breakpoints });
   }
 
   public async restartFrame(
@@ -1560,13 +1473,7 @@ export class NodeJSDebugAdapter extends DebugSession {
 
     await this.requireTransport().sendCommand('Debugger.restartFrame', { callFrameId: frame.callFrameId });
 
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'restartFrame',
-      success: true,
-    };
+    return this.okResponse<DebugProtocol.RestartFrameResponse>('restartFrame');
   }
 
   public goto(args: DebugProtocol.GotoArguments): DebugProtocol.GotoResponse {
@@ -1591,13 +1498,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       this.cdpTransport = null;
     }
 
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'terminate',
-      success: true,
-    };
+    return this.okResponse<DebugProtocol.TerminateResponse>('terminate');
   }
 
   public async restart(): Promise<DebugProtocol.RestartResponse> {
@@ -1606,13 +1507,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     this.variableHandles.clear();
     this.lastException = null;
 
-    return {
-      seq: 0,
-      type: 'response',
-      request_seq: 0,
-      command: 'restart',
-      success: true,
-    };
+    return this.okResponse<DebugProtocol.RestartResponse>('restart');
   }
 
   // Method to simulate logpoint hit - would be called from DAP runtime events
