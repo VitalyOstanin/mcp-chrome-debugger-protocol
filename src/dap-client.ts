@@ -3,10 +3,52 @@ import { z } from 'zod';
 import type { DebugProtocol } from '@vscode/debugprotocol';
 import { NodeJSDebugAdapter, type NodeJSLaunchRequestArguments, type NodeJSAttachRequestArguments } from './nodejs-debug-adapter.js';
 import type { LogpointHit, DebuggerEvent, TrackedBreakpoint } from './types.js';
-import { createSuccessResponse, createErrorResponse } from './utils.js';
+import { createSuccessResponse, createErrorResponse, type MCPResponse } from './utils.js';
+import { DEFAULTS, INSPECTOR_PORT_RANGE } from './constants.js';
 import { kill } from 'node:process';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
+
+// Bounded FIFO buffer with O(1) push and amortised O(1) drop-oldest. The previous
+// implementation used Array.splice(0, n), which is O(n) on every overflow and
+// dominated CPU under high logpoint hit rates.
+class RingBuffer<T> {
+  private items: T[];
+  private head = 0;
+  private size = 0;
+
+  constructor(private readonly capacity: number) {
+    this.items = new Array<T>(capacity);
+  }
+
+  push(item: T): void {
+    const tail = (this.head + this.size) % this.capacity;
+
+    this.items[tail] = item;
+    if (this.size < this.capacity) {
+      this.size++;
+    } else {
+      // Drop the oldest entry by advancing head; the slot just written becomes the newest.
+      this.head = (this.head + 1) % this.capacity;
+    }
+  }
+
+  toArray(): T[] {
+    const out: T[] = new Array<T>(this.size);
+
+    for (let i = 0; i < this.size; i++) {
+      out[i] = this.items[(this.head + i) % this.capacity];
+    }
+
+    return out;
+  }
+
+  clear(): void {
+    this.items = new Array<T>(this.capacity);
+    this.head = 0;
+    this.size = 0;
+  }
+}
 
 export interface DAPConnection {
   adapter: NodeJSDebugAdapter | null;
@@ -16,14 +58,14 @@ export interface DAPConnection {
 export class DAPClient extends EventEmitter {
   // Keep buffers bounded to avoid unbounded memory growth on long debugging sessions.
   // FIFO semantics: when full, the oldest entry is dropped.
-  private static readonly MAX_BUFFER_SIZE = 10_000;
+  private static readonly MAX_BUFFER_SIZE = DEFAULTS.MAX_BUFFER_SIZE;
 
   private readonly connection: DAPConnection = {
     adapter: null,
     isConnected: false,
   };
-  private logpointHits: LogpointHit[] = [];
-  private debuggerEvents: DebuggerEvent[] = [];
+  private readonly logpointHits = new RingBuffer<LogpointHit>(DAPClient.MAX_BUFFER_SIZE);
+  private readonly debuggerEvents = new RingBuffer<DebuggerEvent>(DAPClient.MAX_BUFFER_SIZE);
   private readonly trackedBreakpoints: Map<number, TrackedBreakpoint> = new Map();
   private nextRequestId = 1;
   private readonly pendingRequests = new Map<number, {
@@ -34,16 +76,10 @@ export class DAPClient extends EventEmitter {
 
   private appendLogpointHit(hit: LogpointHit): void {
     this.logpointHits.push(hit);
-    if (this.logpointHits.length > DAPClient.MAX_BUFFER_SIZE) {
-      this.logpointHits.splice(0, this.logpointHits.length - DAPClient.MAX_BUFFER_SIZE);
-    }
   }
 
   private appendDebuggerEvent(event: DebuggerEvent): void {
     this.debuggerEvents.push(event);
-    if (this.debuggerEvents.length > DAPClient.MAX_BUFFER_SIZE) {
-      this.debuggerEvents.splice(0, this.debuggerEvents.length - DAPClient.MAX_BUFFER_SIZE);
-    }
   }
 
   constructor() {
@@ -210,13 +246,14 @@ export class DAPClient extends EventEmitter {
       // (initialize, threads, stackTrace, scopes, loadedSources, exceptionInfo, goto)
       // settle the promise inside the IIFE before this Promise executor returns; the
       // previous design overrode `pendingRequests.get(id)!.resolve` after the IIFE,
-      // which threw a silent TypeError on those paths and leaked the timer for 10s.
+      // which threw a silent TypeError on those paths and leaked the timer for the
+      // request lifetime.
       const timeout = setTimeout(() => {
         if (this.pendingRequests.has(requestId)) {
           this.pendingRequests.delete(requestId);
           reject(new Error(`DAP request timeout: ${method}`));
         }
-      }, 10000);
+      }, DEFAULTS.DAP_REQUEST_TIMEOUT_MS);
 
       this.pendingRequests.set(requestId, {
         resolve: resolve as (value: unknown) => void,
@@ -399,22 +436,40 @@ export class DAPClient extends EventEmitter {
   }
 
   // Public API methods (DAP interface)
-  async connectDefault(): Promise<{ content: Array<{ type: string; text: string }> }> {
-    return this.attachToProcess({ port: 9229 });
+  async connectDefault(): Promise<MCPResponse> {
+    return this.attachToProcess({ port: DEFAULTS.INSPECTOR_PORT });
   }
 
-  async connectUrl(url: string): Promise<{ content: Array<{ type: string; text: string }> }> {
-    // Extract port from URL if needed
-    const match = url.match(/:(\d+)/);
-    const port = match ? parseInt(match[1], 10) : 9229;
+  async connectUrl(url: string): Promise<MCPResponse> {
+    // Parse host and port out of the URL so a remote attach against a non-localhost
+    // address actually goes there. Previously we extracted only the port and dropped
+    // back to localhost, silently breaking remote DAP attach.
+    let port: number = DEFAULTS.INSPECTOR_PORT;
+    let address: string | undefined;
 
-    return this.attachToProcess({ port });
+    try {
+      const parsed = new URL(url);
+
+      if (parsed.port) {
+        port = parseInt(parsed.port, 10);
+      }
+      if (parsed.hostname) {
+        address = parsed.hostname;
+      }
+    } catch {
+      // Fallback for inputs that aren't a full URL: pull just the port out of ":NNNN".
+      const match = url.match(/:(\d+)/);
+
+      if (match) port = parseInt(match[1], 10);
+    }
+
+    return this.attachToProcess({ port, ...(address !== undefined && { address }) });
   }
 
   async enableDebuggerPid(
     pid: number,
     opts?: { discoverTimeoutMs?: number; probeTimeoutMs?: number; ports?: number[] },
-  ): Promise<{ content: Array<{ type: string; text: string }> }> {
+  ): Promise<MCPResponse> {
     try {
       let activation: 'strace' | 'poll' | 'timeout' = 'timeout';
       let detectedPort: number | undefined;
@@ -541,15 +596,15 @@ export class DAPClient extends EventEmitter {
       if (!detectedPort) {
         const candidates: number[] = opts?.ports?.length
           ? opts.ports
-          : [
-              9229, 9230, 9231, 9232, 9233, 9234, 9235, 9236, 9237, 9238, 9239, 9240, 9241, 9242, 9243, 9244, 9245,
-              9246, 9247, 9248, 9249, 9250,
-            ];
-        const deadline = Date.now() + (opts?.discoverTimeoutMs ?? 8000);
+          : Array.from(
+            { length: INSPECTOR_PORT_RANGE.end - INSPECTOR_PORT_RANGE.start + 1 },
+            (_, i) => INSPECTOR_PORT_RANGE.start + i,
+          );
+        const deadline = Date.now() + (opts?.discoverTimeoutMs ?? DEFAULTS.DISCOVER_TIMEOUT_MS);
 
         while (!detectedPort && Date.now() < deadline) {
           for (const cand of candidates) {
-            const ok = await probeInspector(cand, opts?.probeTimeoutMs ?? 400);
+            const ok = await probeInspector(cand, opts?.probeTimeoutMs ?? DEFAULTS.PROBE_TIMEOUT_MS);
 
             if (ok) {
               detectedPort = cand;
@@ -564,7 +619,7 @@ export class DAPClient extends EventEmitter {
       }
 
       // If no port detected, fallback to default inspector port
-      const portToUse = detectedPort ?? 9229;
+      const portToUse = detectedPort ?? DEFAULTS.INSPECTOR_PORT;
       const attachResult = await this.attachToProcess({ port: portToUse });
 
       // Enrich success response with activation details
@@ -591,7 +646,7 @@ export class DAPClient extends EventEmitter {
     }
   }
 
-  async attachToProcess(args: { port?: number; address?: string }): Promise<{ content: Array<{ type: string; text: string }> }> {
+  async attachToProcess(args: { port?: number; address?: string }): Promise<MCPResponse> {
     try {
       // Create new debug adapter instance
       this.connection.adapter = new NodeJSDebugAdapter();
@@ -610,7 +665,7 @@ export class DAPClient extends EventEmitter {
 
       // Attach to the Node.js process
       await this.sendRequest('attach', {
-        port: args.port ?? 9229,
+        port: args.port ?? DEFAULTS.INSPECTOR_PORT,
         address: args.address ?? 'localhost',
       });
 
@@ -618,7 +673,7 @@ export class DAPClient extends EventEmitter {
       this.emitStateChange(true);
 
       return createSuccessResponse({
-        message: `Attached to Node.js process on ${args.address ?? 'localhost'}:${args.port ?? 9229}`,
+        message: `Attached to Node.js process on ${args.address ?? 'localhost'}:${args.port ?? DEFAULTS.INSPECTOR_PORT}`,
         protocol: 'DAP',
       });
     } catch (error) {
@@ -670,19 +725,19 @@ export class DAPClient extends EventEmitter {
 
   // Logpoint and event management
   getLogpointHits(): LogpointHit[] {
-    return [...this.logpointHits];
+    return this.logpointHits.toArray();
   }
 
   clearLogpointHits(): void {
-    this.logpointHits = [];
+    this.logpointHits.clear();
   }
 
   getDebuggerEvents(): DebuggerEvent[] {
-    return [...this.debuggerEvents];
+    return this.debuggerEvents.toArray();
   }
 
   clearDebuggerEvents(): void {
-    this.debuggerEvents = [];
+    this.debuggerEvents.clear();
   }
 
   // Direct DAP method access

@@ -1,9 +1,9 @@
 import type { DAPClient } from "./dap-client.js";
 import type { TruncationOptions } from "./types.js";
-import { withErrorHandling } from "./utils.js";
+import { findProjectRoot, withErrorHandling } from "./utils.js";
+import { DEFAULTS } from "./constants.js";
 import type { DebugProtocol } from '@vscode/debugprotocol';
-import { existsSync } from "node:fs";
-import { resolve, dirname, relative, join } from "node:path";
+import { resolve, relative } from "node:path";
 import { SourceMapResolver } from "./source-map-resolver.js";
 
 export class DAPDebuggerManager {
@@ -13,12 +13,17 @@ export class DAPDebuggerManager {
 
   private truncateResult(data: unknown, options: TruncationOptions = {}): { result: unknown; truncated: boolean } {
     const {
-      maxLength = 20000,
+      maxLength = DEFAULTS.TRUNCATE_MAX_LENGTH,
       maxDepth = 10,
       maxArrayItems = 50,
       maxObjectKeys = 50,
       summary = false,
     } = options;
+    // Pre-floor the budgets so a non-multiple-of-4 maxLength (zod allows any positive
+    // integer) cannot leak fractional indices into substring offsets or "more chars"
+    // counters. The zod schema also caps maxLength at >=100 so these floors stay sane.
+    const stringBudget = Math.max(0, Math.floor(maxLength / 4));
+    const previewBudget = Math.max(0, Math.floor(maxLength / 2));
     let truncated = false;
     const truncateValue = (value: unknown, currentDepth: number): unknown => {
       if (currentDepth > maxDepth) {
@@ -32,10 +37,10 @@ export class DAPDebuggerManager {
       }
 
       if (typeof value === 'string') {
-        if (value.length > maxLength / 4) {
+        if (value.length > stringBudget) {
           truncated = true;
 
-          return `${value.substring(0, maxLength / 4)}... [${value.length - maxLength / 4} more chars]`;
+          return `${value.substring(0, stringBudget)}... [${value.length - stringBudget} more chars]`;
         }
 
         return value;
@@ -94,15 +99,19 @@ export class DAPDebuggerManager {
       return value;
     };
     const result = truncateValue(data, 0);
-    // Final length check
+    // Final length check. Cache the serialised forms so the fallback branch does not
+    // re-serialise twice (originalSize + preview); previously evaluate / stackTrace /
+    // variables paid up to 3x JSON.stringify on large payloads.
     const jsonString = JSON.stringify(result, null, 2);
 
     if (jsonString.length > maxLength) {
+      const originalJson = JSON.stringify(data, null, 2);
+
       return {
         result: {
           error: 'Response too large',
-          preview: `${JSON.stringify(result, null, 2).substring(0, maxLength / 2)}...`,
-          originalSize: JSON.stringify(data, null, 2).length,
+          preview: `${jsonString.substring(0, previewBudget)}...`,
+          originalSize: originalJson.length,
           truncatedSize: jsonString.length,
         },
         truncated: true,
@@ -113,16 +122,7 @@ export class DAPDebuggerManager {
   }
 
   private findProjectRoot(): string {
-    let currentDir = process.cwd();
-
-    while (currentDir !== dirname(currentDir)) {
-      if (existsSync(join(currentDir, 'package.json'))) {
-        return currentDir;
-      }
-      currentDir = dirname(currentDir);
-    }
-
-    return process.cwd();
+    return findProjectRoot(process.cwd()) ?? process.cwd();
   }
 
   async removeBreakpoint(breakpointId: number) {

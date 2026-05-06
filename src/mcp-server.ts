@@ -72,10 +72,14 @@ export class NodeDebuggerMCPServer {
     };
   }
 
-  private createToolUnavailableError(toolName: string, reason: string): never {
-    const errorMessage = `Tool "${toolName}" is disabled: ${reason}`;
-
-    throw new Error(errorMessage);
+  private createToolUnavailableError(toolName: string, reason: string) {
+    return {
+      isError: true,
+      content: [{
+        type: "text" as const,
+        text: `Tool "${toolName}" is disabled: ${reason}`,
+      }],
+    };
   }
 
   // Method to send breakpoint notifications to MCP client
@@ -211,8 +215,6 @@ export class NodeDebuggerMCPServer {
     });
   }
 
-  // Removed requireConnection method as tools are now dynamically enabled/disabled
-
   private setupConnectionTools() {
     // Connection tools - available when NOT connected
     const attachTool = this.server.registerTool(
@@ -263,10 +265,6 @@ export class NodeDebuggerMCPServer {
     );
 
     this.tools.set("attach", { tool: attachTool, category: 'connection' });
-
-    // attach tool above now handles all connection scenarios
-
-    // enableDebuggerPid functionality moved to attach tool
 
     // Disconnection tool - available when connected
     const disconnectTool = this.server.registerTool(
@@ -350,8 +348,6 @@ export class NodeDebuggerMCPServer {
     );
 
     this.tools.set("setBreakpoints", { tool: setBreakpointsTool, category: 'debugging' });
-
-    // Logpoints are now handled by setBreakpoints tool with logMessage parameter
 
     const removeBreakpointTool = this.server.registerTool(
       "removeBreakpoint",
@@ -541,9 +537,9 @@ export class NodeDebuggerMCPServer {
           expression: z.string().describe("JavaScript expression to evaluate"),
           frameId: z.number().int().min(0).optional().describe("Stack frame ID for context (optional)"),
           context: z.enum(['watch', 'repl', 'hover']).optional().describe("Context for the evaluation (optional)"),
-          maxLength: z.number().int().min(1).optional().describe("Maximum response length in characters (default: 20000)"),
+          maxLength: z.number().int().min(100).optional().describe("Maximum response length in characters (default: 20000, min: 100)"),
           maxDepth: z.number().int().min(0).optional().describe("Maximum object depth (default: 10)"),
-          maxArrayItems: z.number().int().min(0).optional().describe("Maximum array items to show (default: 50)"),
+          maxArrayItems: z.number().int().min(1).optional().describe("Maximum array items to show (default: 50, min: 1)"),
           maxObjectKeys: z.number().int().min(0).optional().describe("Maximum object keys to show (default: 50)"),
           summary: z.boolean().optional().describe("Return summary mode (types only, default: false)"),
         },
@@ -574,9 +570,9 @@ export class NodeDebuggerMCPServer {
           threadId: idSchema.optional().describe("Thread ID to get stack for (optional)"),
           startFrame: z.number().int().min(0).optional().describe("Start frame index (default: 0)"),
           levels: z.number().int().min(0).optional().describe("Number of frames to return (default: all)"),
-          maxLength: z.number().int().min(1).optional().describe("Maximum response length in characters (default: 20000)"),
+          maxLength: z.number().int().min(100).optional().describe("Maximum response length in characters (default: 20000, min: 100)"),
           maxDepth: z.number().int().min(0).optional().describe("Maximum object depth (default: 10)"),
-          maxArrayItems: z.number().int().min(0).optional().describe("Maximum array items to show (default: 50)"),
+          maxArrayItems: z.number().int().min(1).optional().describe("Maximum array items to show (default: 50, min: 1)"),
           maxObjectKeys: z.number().int().min(0).optional().describe("Maximum object keys to show (default: 50)"),
           summary: z.boolean().optional().describe("Return summary mode (types only, default: false)"),
         },
@@ -608,9 +604,9 @@ export class NodeDebuggerMCPServer {
           filter: z.enum(['indexed', 'named']).optional().describe("Filter for variable types (optional)"),
           start: z.number().int().min(0).optional().describe("Start index for indexed variables (optional)"),
           count: z.number().int().min(0).optional().describe("Number of variables to return (optional)"),
-          maxLength: z.number().int().min(1).optional().describe("Maximum response length in characters (default: 20000)"),
+          maxLength: z.number().int().min(100).optional().describe("Maximum response length in characters (default: 20000, min: 100)"),
           maxDepth: z.number().int().min(0).optional().describe("Maximum object depth (default: 10)"),
-          maxArrayItems: z.number().int().min(0).optional().describe("Maximum array items to show (default: 50)"),
+          maxArrayItems: z.number().int().min(1).optional().describe("Maximum array items to show (default: 50, min: 1)"),
           maxObjectKeys: z.number().int().min(0).optional().describe("Maximum object keys to show (default: 50)"),
           summary: z.boolean().optional().describe("Return summary mode (types only, default: false)"),
         },

@@ -1,5 +1,7 @@
 // Utility functions and constants for MCP DAP Debugger Protocol
 import { setTimeout } from "node:timers/promises";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 // Common error messages
 export const ERROR_MESSAGES = {
@@ -97,3 +99,20 @@ export function requireConnection(isConnected: boolean): void {
 
 // Utility function for delays using Node.js promise timers
 export const sleep = setTimeout;
+
+// Walk up from startDir looking for a package.json. Returns the directory that
+// contains it, or null if none found before reaching the filesystem root.
+// DAPDebuggerManager and SourceMapResolver used to inline two slightly different
+// copies of this; centralise so a future change touches one place.
+export function findProjectRoot(startDir: string): string | null {
+  let currentDir = startDir;
+
+  while (currentDir !== dirname(currentDir)) {
+    if (existsSync(join(currentDir, 'package.json'))) {
+      return currentDir;
+    }
+    currentDir = dirname(currentDir);
+  }
+
+  return null;
+}

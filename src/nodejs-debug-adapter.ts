@@ -55,11 +55,9 @@ export class NodeJSDebugAdapter extends DebugSession {
   private static readonly THREAD_ID = 1;
 
   private nodeProcess: ChildProcess | null = null;
-  private isAttached = false;
   private readonly breakpoints = new Map<string, NodeJSRuntimeBreakpoint[]>();
   private nextBreakpointId = 1;
   private cdpTransport: CDPTransport | null = null;
-  private cdpConnection: CDPConnection | null = null;
   private readonly sourceMapResolver = new SourceMapResolver();
   private readonly scriptsByUrl = new Map<string, string>();
   private readonly scriptsById = new Map<string, Protocol.Debugger.ScriptParsedEvent>();
@@ -107,7 +105,7 @@ export class NodeJSDebugAdapter extends DebugSession {
   protected initializeRequest(
     response: DebugProtocol.InitializeResponse,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    __args: DebugProtocol.InitializeRequestArguments,
+    _args: DebugProtocol.InitializeRequestArguments,
   ): void {
     // Build and return capabilities of this debug adapter
     response.body = response.body ?? {};
@@ -208,8 +206,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         }
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      this.nodeProcess.on("exit", (__code) => {
+      this.nodeProcess.on("exit", () => {
         this.sendEvent(new TerminatedEvent());
         this.nodeProcess = null;
       });
@@ -267,7 +264,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     this.setupCDPEventHandlers();
 
     // Connect to Node.js inspector via CDP
-    this.cdpConnection = await this.cdpTransport.connect();
+    await this.cdpTransport.connect();
 
     // Enable necessary CDP domains
     await this.cdpTransport.enableDomains(["Runtime", "Debugger", "Console", "Profiler"]);
@@ -288,8 +285,6 @@ export class NodeJSDebugAdapter extends DebugSession {
         ),
       );
     }
-
-    this.isAttached = true;
 
     this.sendEvent(
       new OutputEvent(
@@ -349,7 +344,7 @@ export class NodeJSDebugAdapter extends DebugSession {
               const plain = params.url.replace(/^file:\/\//, "");
 
               this.scriptsByUrl.set(plain, params.scriptId);
-            } catch { void 0; }
+            } catch { /* ignore */ }
           }
         }
         break;
@@ -985,10 +980,8 @@ export class NodeJSDebugAdapter extends DebugSession {
     if (this.cdpTransport) {
       await this.cdpTransport.disconnect();
       this.cdpTransport = null;
-      this.cdpConnection = null;
     }
 
-    this.isAttached = false;
     this.currentCallFrames = [];
     this.variableHandles.clear();
 
@@ -1146,10 +1139,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         scopeIndex,
         objectId: scope.object.objectId,
       });
-      const presentationHint =
-        scope.type === 'local' ? 'locals'
-        : scope.type === 'global' ? undefined
-        : undefined;
+      const presentationHint = scope.type === 'local' ? 'locals' : undefined;
       const expensive = scope.type === 'global';
 
       return {
@@ -1506,10 +1496,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     if (this.cdpTransport) {
       await this.cdpTransport.disconnect();
       this.cdpTransport = null;
-      this.cdpConnection = null;
     }
-
-    this.isAttached = false;
 
     return {
       seq: 0,
@@ -1536,9 +1523,9 @@ export class NodeJSDebugAdapter extends DebugSession {
   }
 
   // Method to simulate logpoint hit - would be called from DAP runtime events
-  public simulateLogpointHit(__filePath: string, __line: number, __variables: Record<string, unknown>): void {
-    const breakpoints = this.breakpoints.get(__filePath) ?? [];
-    const logpoint = breakpoints.find((bp) => bp.line === __line && bp.logMessage);
+  public simulateLogpointHit(filePath: string, line: number, variables: Record<string, unknown>): void {
+    const breakpoints = this.breakpoints.get(filePath) ?? [];
+    const logpoint = breakpoints.find((bp) => bp.line === line && bp.logMessage);
 
     if (logpoint?.logMessage) {
       // Build message and vars similar to binding-based runtime path
@@ -1549,9 +1536,9 @@ export class NodeJSDebugAdapter extends DebugSession {
 
       for (const expr of exprs) {
         try {
-          // simple dotted path lookup from provided __variables
+          // simple dotted path lookup from provided variables
           const parts = expr.split(".");
-          let value: unknown = __variables;
+          let value: unknown = variables;
 
           for (const part of parts) {
             value = (value as Record<string, unknown>)[part];
@@ -1587,7 +1574,7 @@ export class NodeJSDebugAdapter extends DebugSession {
 
   // Method to simulate breakpoint hit
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  public simulateBreakpointHit(__filePath: string, __line: number): void {
+  public simulateBreakpointHit(_filePath: string, _line: number): void {
     this.sendEvent(new StoppedEvent("breakpoint", NodeJSDebugAdapter.THREAD_ID));
   }
 
