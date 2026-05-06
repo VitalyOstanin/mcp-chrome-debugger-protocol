@@ -9,7 +9,7 @@ export interface MCPToolResult {
     type: string;
     text: string;
   }>;
-  isError?: boolean;
+  isError?: boolean | undefined;
 }
 
 export class MCPClient {

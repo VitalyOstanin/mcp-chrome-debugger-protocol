@@ -11,8 +11,8 @@ import path from 'path';
 
 interface Tool {
   name: string;
-  title?: string;
-  description?: string;
+  title?: string | undefined;
+  description?: string | undefined;
 }
 
 describe('Claude Code workaround verification', () => {
@@ -71,7 +71,7 @@ describe('Claude Code workaround verification', () => {
       breakpoints: [{ line: 10, logMessage: 'test' }],
     });
 
-    expect(errorResult.content[0].text).toContain('disabled');
+    expect(errorResult.content[0]!.text).toContain('disabled');
     // Error message indicates the tool is disabled, which is the key information
 
   });
@@ -92,7 +92,7 @@ describe('Claude Code workaround verification', () => {
         logMessage: 'Integration test logpoint: counter = {counter}',
       }],
     });
-    const result = JSON.parse(logpointResult.content[0].text);
+    const result = JSON.parse(logpointResult.content[0]!.text);
 
     expect(result.success).toBe(true);
   });
@@ -142,7 +142,7 @@ describe('Claude Code workaround verification', () => {
 
     // Get debugger state
     const debuggerState = await mcpClient.callTool('getDebuggerState', {});
-    const stateData = JSON.parse(debuggerState.content[0].text);
+    const stateData = JSON.parse(debuggerState.content[0]!.text);
 
     expect(stateData.toolsAvailability.disabled).toContain('setBreakpoints');
 

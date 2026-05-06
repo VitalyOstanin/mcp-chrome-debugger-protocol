@@ -11,8 +11,8 @@ import path from 'path';
 
 interface Tool {
   name: string;
-  title?: string;
-  description?: string;
+  title?: string | undefined;
+  description?: string | undefined;
 }
 
 describe('Dynamic tool behavior (problematic with Claude Code)', () => {
@@ -112,7 +112,7 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
         breakpoints: [{ line: 1, column: 1, logMessage: 'test' }],
       });
 
-      expect(invalidResult.content[0].text).toContain('is disabled');
+      expect(invalidResult.content[0]!.text).toContain('is disabled');
       // Error message provides the key information about the tool being disabled
 
       // Step 2: Connect and try again
@@ -124,7 +124,7 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
         source: { path: testApp.getMainFilePath() },
         breakpoints: [{ line: 10, column: 1, logMessage: 'Runtime validation success!' }],
       });
-      const result = JSON.parse(validResult.content[0].text);
+      const result = JSON.parse(validResult.content[0]!.text);
 
       expect(result.success).toBe(true);
     });
@@ -145,7 +145,7 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
           source: { path: testApp.getMainFilePath() },
           breakpoints: [{ line: 5 + i, column: 1, logMessage: `Cycle ${i + 1} test` }],
         });
-        const parsedResult = JSON.parse(result.content[0].text);
+        const parsedResult = JSON.parse(result.content[0]!.text);
 
         expect(parsedResult.success).toBe(true);
 
@@ -182,7 +182,7 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
         breakpoints: [{ line: 1, column: 1, logMessage: 'test' }],
       });
 
-      expect(helpfulError.content[0].text).toContain('disabled');
+      expect(helpfulError.content[0]!.text).toContain('disabled');
       // Error message provides clear indication that the tool is disabled
 
       // Works after connection
@@ -194,7 +194,7 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
         source: { path: testApp.getMainFilePath() },
         breakpoints: [{ line: 8, column: 1, logMessage: 'UX improvement verified!' }],
       });
-      const workingResultData = JSON.parse(workingResult.content[0].text);
+      const workingResultData = JSON.parse(workingResult.content[0]!.text);
 
       expect(workingResultData.success).toBe(true);
 
@@ -206,7 +206,7 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
 
       // Step 1: Check debugger state (should show setBreakpoints as disabled)
       const debuggerState = await mcpClient.callTool('getDebuggerState', {});
-      const stateData = JSON.parse(debuggerState.content[0].text);
+      const stateData = JSON.parse(debuggerState.content[0]!.text);
 
       expect(stateData.toolsAvailability.disabled).toContain('setBreakpoints');
 
@@ -222,7 +222,7 @@ describe('Dynamic tool behavior (problematic with Claude Code)', () => {
       await debuggerHelper.connectToDebugger(port);
 
       const connectedState = await mcpClient.callTool('getDebuggerState', {});
-      const connectedStateData = JSON.parse(connectedState.content[0].text);
+      const connectedStateData = JSON.parse(connectedState.content[0]!.text);
 
 
       expect(connectedStateData.toolsAvailability.enabled).toContain('setBreakpoints');

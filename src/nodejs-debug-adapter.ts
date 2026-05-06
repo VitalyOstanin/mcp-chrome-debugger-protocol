@@ -17,35 +17,35 @@ import { SourceMapResolver } from './source-map-resolver.js';
 
 export interface NodeJSLaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
   program: string;
-  args?: string[];
-  cwd?: string;
+  args?: string[] | undefined;
+  cwd?: string | undefined;
   env?: Record<string, string>;
-  console?: 'internalConsole' | 'integratedTerminal' | 'externalTerminal';
-  sourceMaps?: boolean;
-  outFiles?: string[];
+  console?: 'internalConsole' | 'integratedTerminal' | 'externalTerminal' | undefined;
+  sourceMaps?: boolean | undefined;
+  outFiles?: string[] | undefined;
   sourceMapPathOverrides?: Record<string, string>;
-  skipFiles?: string[];
+  skipFiles?: string[] | undefined;
 }
 
 export interface NodeJSAttachRequestArguments extends DebugProtocol.AttachRequestArguments {
-  port?: number;
-  address?: string;
-  localRoot?: string;
-  remoteRoot?: string;
-  sourceMaps?: boolean;
-  outFiles?: string[];
+  port?: number | undefined;
+  address?: string | undefined;
+  localRoot?: string | undefined;
+  remoteRoot?: string | undefined;
+  sourceMaps?: boolean | undefined;
+  outFiles?: string[] | undefined;
   sourceMapPathOverrides?: Record<string, string>;
-  skipFiles?: string[];
+  skipFiles?: string[] | undefined;
 }
 
 interface NodeJSRuntimeBreakpoint {
   id: string;
-  dapId?: number;
+  dapId?: number | undefined;
   line: number;
-  column?: number;
+  column?: number | undefined;
   verified: boolean;
-  condition?: string;
-  logMessage?: string;
+  condition?: string | undefined;
+  logMessage?: string | undefined;
 }
 
 type VariableHandle =
@@ -104,7 +104,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     this.setDebuggerColumnsStartAt1(true);
   }
 
-  protected initializeRequest(
+  protected override initializeRequest(
     response: DebugProtocol.InitializeResponse,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _args: DebugProtocol.InitializeRequestArguments,
@@ -148,7 +148,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     this.sendEvent(new InitializedEvent());
   }
 
-  protected async launchRequest(
+  protected override async launchRequest(
     response: DebugProtocol.LaunchResponse,
     args: NodeJSLaunchRequestArguments,
   ): Promise<void> {
@@ -223,7 +223,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     }
   }
 
-  protected async attachRequest(
+  protected override async attachRequest(
     response: DebugProtocol.AttachResponse,
     args: NodeJSAttachRequestArguments,
   ): Promise<void> {
@@ -412,7 +412,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       // Prefer the richer payload from Runtime.exceptionThrown if it arrived first
       // (it carries stackTrace/scriptId from CDP). Only synthesize from the call
       // frame when nothing has been recorded yet.
-      if (!this.lastException) {
+      if (!this.lastException && this.currentCallFrames[0]) {
         const data = params.data as Protocol.Runtime.RemoteObject | undefined;
         const top = this.currentCallFrames[0].location;
 
@@ -424,7 +424,7 @@ export class NodeJSDebugAdapter extends DebugSession {
           lineNumber: top.lineNumber + 1,
           columnNumber: (top.columnNumber ?? 0) + 1,
           scriptId: top.scriptId,
-          exception: data,
+          ...(data !== undefined ? { exception: data } : {}),
         };
       }
     }
@@ -719,9 +719,10 @@ export class NodeJSDebugAdapter extends DebugSession {
       logMessage: sourceBreakpoint.logMessage,
     };
     const actualBp = new Breakpoint(verified, line, column);
+    const sourceName = path.split("/").pop();
 
     (actualBp as unknown as DebugProtocol.Breakpoint).source = {
-      name: path.split("/").pop(),
+      ...(sourceName !== undefined ? { name: sourceName } : {}),
       path,
     };
     (actualBp as unknown as DebugProtocol.Breakpoint).id = dapId;
@@ -729,7 +730,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     return { runtimeBp, actualBp };
   }
 
-  protected async setBreakPointsRequest(
+  protected override async setBreakPointsRequest(
     response: DebugProtocol.SetBreakpointsResponse,
     args: DebugProtocol.SetBreakpointsArguments,
   ): Promise<void> {
@@ -758,7 +759,8 @@ export class NodeJSDebugAdapter extends DebugSession {
       const total = Math.max(clientLines.length, sourceBreakpoints.length);
 
       for (let i = 0; i < total; i++) {
-        const sourceBreakpoint = sourceBreakpoints[i] ?? ({ line: clientLines[i] });
+        const fallbackLine = clientLines[i] ?? 1;
+        const sourceBreakpoint: DebugProtocol.SourceBreakpoint = sourceBreakpoints[i] ?? { line: fallbackLine };
         const line = clientLines[i] ?? sourceBreakpoint.line;
         // Use 1-based default column to satisfy source map resolution (resolver rejects 0)
         const column = sourceBreakpoint.column ?? 1;
@@ -834,7 +836,7 @@ export class NodeJSDebugAdapter extends DebugSession {
 
       if (index < 0) continue;
 
-      const [bp] = list.splice(index, 1);
+      const [bp] = list.splice(index, 1) as [NodeJSRuntimeBreakpoint];
 
       if (this.cdpTransport && bp.verified) {
         try {
@@ -913,7 +915,7 @@ export class NodeJSDebugAdapter extends DebugSession {
   // evaluate, stackTrace, scopes, variables, threads, ...) so we never depend on the DebugSession
   // protected handler chain for those operations.
 
-  protected async continueRequest(
+  protected override async continueRequest(
     response: DebugProtocol.ContinueResponse,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _args: DebugProtocol.ContinueArguments,
@@ -933,7 +935,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     }
   }
 
-  protected async pauseRequest(
+  protected override async pauseRequest(
     response: DebugProtocol.PauseResponse,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _args: DebugProtocol.PauseArguments,
@@ -948,7 +950,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     }
   }
 
-  protected async stepInRequest(
+  protected override async stepInRequest(
     response: DebugProtocol.StepInResponse,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _args: DebugProtocol.StepInArguments,
@@ -967,7 +969,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     }
   }
 
-  protected async stepOutRequest(
+  protected override async stepOutRequest(
     response: DebugProtocol.StepOutResponse,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _args: DebugProtocol.StepOutArguments,
@@ -986,7 +988,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     }
   }
 
-  protected async nextRequest(
+  protected override async nextRequest(
     response: DebugProtocol.NextResponse,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _args: DebugProtocol.NextArguments,
@@ -1005,7 +1007,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     }
   }
 
-  protected configurationDoneRequest(
+  protected override configurationDoneRequest(
     response: DebugProtocol.ConfigurationDoneResponse,
     _args: DebugProtocol.ConfigurationDoneArguments,
   ): void {
@@ -1014,7 +1016,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     // In real implementation, we could start execution here if not already started
   }
 
-  protected async disconnectRequest(
+  protected override async disconnectRequest(
     response: DebugProtocol.DisconnectResponse,
     args: DebugProtocol.DisconnectArguments,
   ): Promise<void> {
@@ -1157,9 +1159,9 @@ export class NodeJSDebugAdapter extends DebugSession {
         name: frame.functionName || '<anonymous>',
         line: frame.location.lineNumber + 1,
         column: (frame.location.columnNumber ?? 0) + 1,
-        source: sourcePath
-          ? { name: sourcePath.split('/').pop() ?? sourcePath, path: sourcePath }
-          : undefined,
+        ...(sourcePath
+          ? { source: { name: sourcePath.split('/').pop() ?? sourcePath, path: sourcePath } }
+          : {}),
       };
     });
 
@@ -1178,20 +1180,20 @@ export class NodeJSDebugAdapter extends DebugSession {
       throw new Error(`Frame ${args.frameId} not found`);
     }
 
-    const frame = this.currentCallFrames[args.frameId];
+    const frame = this.currentCallFrames[args.frameId]!;
     const dapScopes: DebugProtocol.Scope[] = frame.scopeChain.map((scope, scopeIndex) => {
       const reference = this.allocateHandle({
         kind: 'scope',
         frameIndex: args.frameId,
         scopeIndex,
-        objectId: scope.object.objectId,
+        ...(scope.object.objectId !== undefined ? { objectId: scope.object.objectId } : {}),
       });
       const presentationHint = scope.type === 'local' ? 'locals' : undefined;
       const expensive = scope.type === 'global';
 
       return {
         name: scope.name ?? scope.type,
-        presentationHint,
+        ...(presentationHint !== undefined ? { presentationHint } : {}),
         variablesReference: reference,
         expensive,
       };
@@ -1247,7 +1249,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         return {
           name: prop.name,
           value: remote ? this.remoteObjectToString(remote) : '<accessor>',
-          type: remote?.type,
+          ...(remote?.type !== undefined ? { type: remote.type } : {}),
           variablesReference: childRef,
         };
       });
@@ -1268,7 +1270,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     let exceptionDetails: Protocol.Runtime.ExceptionDetails | undefined;
 
     if (args.frameId !== undefined && this.currentCallFrames[args.frameId]) {
-      const callFrame = this.currentCallFrames[args.frameId];
+      const callFrame = this.currentCallFrames[args.frameId]!;
       const response = await transport.sendCommand<Protocol.Debugger.EvaluateOnCallFrameResponse>(
         'Debugger.evaluateOnCallFrame',
         {
@@ -1337,7 +1339,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       throw new Error(`Frame ${handle.frameIndex} not found`);
     }
 
-    const callFrame = this.currentCallFrames[handle.frameIndex];
+    const callFrame = this.currentCallFrames[handle.frameIndex]!;
     const transport = this.requireTransport();
     // Evaluate the desired value as an expression, then assign via Debugger.setVariableValue
     const evalResult = await transport.sendCommand<Protocol.Debugger.EvaluateOnCallFrameResponse>(
@@ -1516,7 +1518,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       throw new Error(`Frame ${args.frameId} not found`);
     }
 
-    const frame = this.currentCallFrames[args.frameId];
+    const frame = this.currentCallFrames[args.frameId]!;
 
     await this.requireTransport().sendCommand('Debugger.restartFrame', { callFrameId: frame.callFrameId });
 

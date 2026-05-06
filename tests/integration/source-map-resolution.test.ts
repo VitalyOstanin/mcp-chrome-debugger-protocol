@@ -44,7 +44,7 @@ describe('resolveOriginalPosition', () => {
         expect(result.content).toBeDefined();
         expect(result.content.length).toBe(1);
 
-        const response = JSON.parse(result.content[0].text);
+        const response = JSON.parse(result.content[0]!.text);
 
         expect(response.success).toBe(true);
         expect(response.originalPosition).toBeDefined();
@@ -71,7 +71,7 @@ describe('resolveOriginalPosition', () => {
       expect(result.content).toBeDefined();
       expect(result.content.length).toBe(1);
 
-      const response = JSON.parse(result.content[0].text);
+      const response = JSON.parse(result.content[0]!.text);
 
       expect(response.error).toBe('No original position found');
       // searchedPaths may be undefined in some error cases
@@ -102,7 +102,7 @@ describe('resolveOriginalPosition', () => {
         expect(result.content).toBeDefined();
         expect(result.content.length).toBe(1);
 
-        const response = JSON.parse(result.content[0].text);
+        const response = JSON.parse(result.content[0]!.text);
 
         expect(response.error).toBe('No original position found');
         // generatedPosition may be undefined in some error cases
@@ -147,7 +147,7 @@ describe('resolveGeneratedPosition', () => {
         expect(result.content).toBeDefined();
         expect(result.content.length).toBe(1);
 
-        const response = JSON.parse(result.content[0].text);
+        const response = JSON.parse(result.content[0]!.text);
 
         if (response.success) {
           expect(response.generatedPosition).toBeDefined();
@@ -198,7 +198,7 @@ describe('resolveGeneratedPosition', () => {
           originalColumn: 1, // Updated to 1-based column coordinate
           sourceMapPaths: [sourceMapPath],
         });
-        let response = JSON.parse(result.content[0].text);
+        let response = JSON.parse(result.content[0]!.text);
 
         if (response.success) {
           expect(response.matchedSource).toBe('../../src/utils/helper.controller.ts');
@@ -212,7 +212,7 @@ describe('resolveGeneratedPosition', () => {
           sourceMapPaths: [sourceMapPath],
         });
 
-        response = JSON.parse(result.content[0].text);
+        response = JSON.parse(result.content[0]!.text);
         if (response.success) {
           expect(response.matchedSource).toBe('../../src/utils/helper.controller.ts');
         }
@@ -225,7 +225,7 @@ describe('resolveGeneratedPosition', () => {
           sourceMapPaths: [sourceMapPath],
         });
 
-        response = JSON.parse(result.content[0].text);
+        response = JSON.parse(result.content[0]!.text);
         if (response.success) {
           expect(response.matchedSource).toBe('../../src/utils/helper.controller.ts');
         }
@@ -263,7 +263,7 @@ describe('resolveGeneratedPosition', () => {
         expect(result.content).toBeDefined();
         expect(result.content.length).toBe(1);
 
-        const response = JSON.parse(result.content[0].text);
+        const response = JSON.parse(result.content[0]!.text);
 
         expect(response.error).toBe('No matching source found in available source maps');
         // originalPosition may be undefined in error cases
@@ -281,7 +281,7 @@ describe('resolveGeneratedPosition', () => {
           expect(response.availableSources.length).toBeGreaterThan(0);
           expect(response.availableSources[0]).toHaveProperty('sourceMap');
           expect(response.availableSources[0]).toHaveProperty('sources');
-          expect(response.availableSources[0].sources).toEqual(['src/index.ts', 'src/other.ts']);
+          expect(response.availableSources[0]!.sources).toEqual(['src/index.ts', 'src/other.ts']);
         }
 
         if (response.suggestions) {
@@ -350,7 +350,7 @@ describe('resolveGeneratedPosition', () => {
           originalColumn: 1,
           sourceMapPaths: [sourceMapPath],
         });
-        const response = JSON.parse(result.content[0].text);
+        const response = JSON.parse(result.content[0]!.text);
 
         expect(response.success).toBe(true);
         expect(response.matchedSource).toBe(expectedMatch);
@@ -377,7 +377,7 @@ describe('resolveGeneratedPosition', () => {
       expect(result.content).toBeDefined();
       expect(result.content.length).toBe(1);
 
-      const response = JSON.parse(result.content[0].text);
+      const response = JSON.parse(result.content[0]!.text);
 
       // The response should either find source maps or report that none were found
       // but it should not crash or return malformed data
@@ -409,7 +409,7 @@ describe('resolveGeneratedPosition', () => {
       expect(result.content).toBeDefined();
       expect(result.content.length).toBe(1);
 
-      const response = JSON.parse(result.content[0].text);
+      const response = JSON.parse(result.content[0]!.text);
 
       // Should either successfully resolve or report no mappings found
       // but should not crash with TypeScript errors
@@ -477,7 +477,7 @@ describe('resolveGeneratedPosition', () => {
       expect(result.content).toBeDefined();
       expect(result.content.length).toBe(1);
 
-      const response = JSON.parse(result.content[0].text);
+      const response = JSON.parse(result.content[0]!.text);
 
       // Should not be a coordinate validation error - but response.error might be undefined if successful
       if (response.error) {

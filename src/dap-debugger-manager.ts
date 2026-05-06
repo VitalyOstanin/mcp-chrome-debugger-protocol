@@ -312,7 +312,7 @@ export class DAPDebuggerManager {
 
   // New DAP methods for complete protocol coverage
 
-  async setBreakpoints(source: { path: string }, breakpoints?: Array<{ line: number; column?: number; condition?: string; logMessage?: string }>, lines?: number[]) {
+  async setBreakpoints(source: { path: string }, breakpoints?: Array<{ line: number; column?: number | undefined; condition?: string | undefined; logMessage?: string | undefined }>, lines?: number[]) {
     return withErrorHandling(async () => {
       const absolutePath = resolve(source.path);
       // Convert parameters to DAP format
@@ -321,13 +321,17 @@ export class DAPDebuggerManager {
           name: relative(this.findProjectRoot(), absolutePath),
           path: absolutePath,
         },
-        lines,
-        breakpoints: breakpoints?.map(bp => ({
-          line: bp.line,
-          column: bp.column,
-          condition: bp.condition,
-          logMessage: bp.logMessage,
-        })),
+        ...(lines !== undefined ? { lines } : {}),
+        ...(breakpoints !== undefined
+          ? {
+            breakpoints: breakpoints.map(bp => ({
+              line: bp.line,
+              ...(bp.column !== undefined ? { column: bp.column } : {}),
+              ...(bp.condition !== undefined ? { condition: bp.condition } : {}),
+              ...(bp.logMessage !== undefined ? { logMessage: bp.logMessage } : {}),
+            })),
+          }
+          : {}),
       };
       const response = await this.dapClient.dapRequest<DebugProtocol.SetBreakpointsResponse>(
         'setBreakpoints',
@@ -492,7 +496,7 @@ export class DAPDebuggerManager {
     }, { operation: 'set variable', variablesReference, name, value });
   }
 
-  async launch(args: { program: string; args?: string[]; cwd?: string; env?: Record<string, string> }) {
+  async launch(args: { program: string; args?: string[] | undefined; cwd?: string | undefined; env?: Record<string, string> | undefined }) {
     return withErrorHandling(async () => {
       const response = await this.dapClient.dapRequest<DebugProtocol.LaunchResponse>(
         'launch',
@@ -580,7 +584,7 @@ export class DAPDebuggerManager {
     }, { operation: 'get exception info', threadId });
   }
 
-  async setExceptionBreakpoints(filters: string[], exceptionOptions?: Array<{ filterId: string; condition?: string }>) {
+  async setExceptionBreakpoints(filters: string[], exceptionOptions?: Array<{ filterId: string; condition?: string | undefined }>) {
     return withErrorHandling(async () => {
       const response = await this.dapClient.dapRequest<DebugProtocol.SetExceptionBreakpointsResponse>(
         'setExceptionBreakpoints',

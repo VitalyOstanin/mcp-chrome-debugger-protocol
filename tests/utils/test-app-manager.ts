@@ -5,7 +5,7 @@ import { setTimeout } from "node:timers/promises";
 import { spawnedProcesses } from "../setup";
 
 export interface TestAppOptions {
-  enableDebugger?: boolean;
+  enableDebugger?: boolean | undefined;
   port?: number; // For cases where we need a specific port (like connect_default)
   serverPort?: number; // Port for the HTTP server
   debug?: boolean; // Debug mode
@@ -120,7 +120,6 @@ export class TestAppManager {
 
             resolve({
               pid: this.process!.pid!,
-              port: undefined,
               serverPort,
             });
           }
@@ -339,22 +338,24 @@ export class TestAppManager {
     for (const pattern of patterns) {
       const match = stderrOutput.match(pattern);
 
-      if (match) {
-        if (match[1].startsWith('ws://')) {
+      if (match?.[1]) {
+        const captured = match[1];
+
+        if (captured.startsWith('ws://')) {
           // Full WebSocket URL found
-          const webSocketUrl = match[1];
+          const webSocketUrl = captured;
           // Extract port from IPv4 or IPv6 URL
           const portMatch = webSocketUrl.match(/:(\d+)\//) ?? webSocketUrl.match(/\]:(\d+)\//);
 
-          if (portMatch) {
+          if (portMatch?.[1]) {
             return {
               port: parseInt(portMatch[1]),
               webSocketUrl,
             };
           }
-        } else if (match[1]) {
+        } else {
           // Only port number found, construct WebSocket URL (default to IPv4)
-          const port = parseInt(match[1]);
+          const port = parseInt(captured);
 
           return {
             port,

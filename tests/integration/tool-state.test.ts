@@ -45,7 +45,7 @@ describe("MCP Chrome Debugger Protocol - Tool State Management", () => {
 
       expect(initialStateResult.isError).toBeFalsy();
 
-      const initialState = JSON.parse(initialStateResult.content[0].text);
+      const initialState = JSON.parse(initialStateResult.content[0]!.text);
 
       expect(initialState.connection.isConnected).toBeFalsy();
       expect(initialState.state.state).toBe('disconnected');
@@ -66,7 +66,7 @@ describe("MCP Chrome Debugger Protocol - Tool State Management", () => {
 
       expect(connectResult.isError).toBeFalsy();
 
-      const connectData = JSON.parse(connectResult.content[0].text);
+      const connectData = JSON.parse(connectResult.content[0]!.text);
 
       expect(connectData.success).toBe(true);
 
@@ -75,7 +75,7 @@ describe("MCP Chrome Debugger Protocol - Tool State Management", () => {
 
       expect(connectedStateResult.isError).toBeFalsy();
 
-      const connectedState = JSON.parse(connectedStateResult.content[0].text);
+      const connectedState = JSON.parse(connectedStateResult.content[0]!.text);
 
       expect(connectedState.connection.isConnected).toBeTruthy();
       expect(connectedState.state.state).toBe('connected');
@@ -102,7 +102,7 @@ describe("MCP Chrome Debugger Protocol - Tool State Management", () => {
       const connectResult = await mcpClient.callTool("attach", {
         url: webSocketUrl!,
       });
-      const firstConnectData = JSON.parse(connectResult.content[0].text);
+      const firstConnectData = JSON.parse(connectResult.content[0]!.text);
 
       expect(firstConnectData.success).toBe(true);
 
@@ -110,17 +110,17 @@ describe("MCP Chrome Debugger Protocol - Tool State Management", () => {
       const connectResult2 = await mcpClient.callTool("attach", { url: webSocketUrl! });
 
       expect(connectResult2.isError).toBe(true);
-      expect(connectResult2.content[0].text).toContain("disabled");
+      expect(connectResult2.content[0]!.text).toContain("disabled");
 
       const connectResult3 = await mcpClient.callTool("attach", { url: "ws://localhost:9229" });
 
       expect(connectResult3.isError).toBe(true);
-      expect(connectResult3.content[0].text).toContain("disabled");
+      expect(connectResult3.content[0]!.text).toContain("disabled");
 
       const enableResult = await mcpClient.callTool("attach", { processId: pid });
 
       expect(enableResult.isError).toBe(true);
-      expect(enableResult.content[0].text).toContain("disabled");
+      expect(enableResult.content[0]!.text).toContain("disabled");
     });
 
     it("should prevent using disabled debugging tools when disconnected", async () => {
@@ -128,7 +128,7 @@ describe("MCP Chrome Debugger Protocol - Tool State Management", () => {
       const disconnectResult = await mcpClient.callTool("disconnect");
 
       expect(disconnectResult.isError).toBe(true);
-      expect(disconnectResult.content[0].text).toContain("disabled");
+      expect(disconnectResult.content[0]!.text).toContain("disabled");
 
       const breakpointResult = await mcpClient.callTool("setBreakpoints", {
         source: { path: "/some/path" },
@@ -136,23 +136,23 @@ describe("MCP Chrome Debugger Protocol - Tool State Management", () => {
       });
 
       expect(breakpointResult.isError).toBe(true);
-      expect(breakpointResult.content[0].text).toContain("disabled");
+      expect(breakpointResult.content[0]!.text).toContain("disabled");
 
       const evaluateResult = await mcpClient.callTool("evaluate", {
         expression: "1 + 1",
       });
 
       expect(evaluateResult.isError).toBe(true);
-      expect(evaluateResult.content[0].text).toContain("Requires debugger connection");
+      expect(evaluateResult.content[0]!.text).toContain("Requires debugger connection");
 
       const callStackResult = await mcpClient.callTool("stackTrace");
 
       // stackTrace should either error or indicate it's not connected
       if (callStackResult.isError) {
-        expect(callStackResult.content[0].text).toContain("disabled");
+        expect(callStackResult.content[0]!.text).toContain("disabled");
       } else {
         // If it doesn't error, it should return some indication that it can't work
-        expect(callStackResult.content[0].text).toMatch(/(not available|disabled|Not connected|requires connection)/i);
+        expect(callStackResult.content[0]!.text).toMatch(/(not available|disabled|Not connected|requires connection)/i);
       }
     });
 
@@ -168,7 +168,7 @@ describe("MCP Chrome Debugger Protocol - Tool State Management", () => {
 
       // Verify we're connected and debugging tools are available
       const connectedStateResult = await mcpClient.callTool("getDebuggerState");
-      const connectedState = JSON.parse(connectedStateResult.content[0].text);
+      const connectedState = JSON.parse(connectedStateResult.content[0]!.text);
 
       expect(connectedState.connection.isConnected).toBeTruthy();
       expect(connectedState.state.enabledTools).toContain('disconnect');
@@ -178,7 +178,7 @@ describe("MCP Chrome Debugger Protocol - Tool State Management", () => {
 
       // Verify state switched back
       const disconnectedStateResult = await mcpClient.callTool("getDebuggerState");
-      const disconnectedState = JSON.parse(disconnectedStateResult.content[0].text);
+      const disconnectedState = JSON.parse(disconnectedStateResult.content[0]!.text);
 
       expect(disconnectedState.connection.isConnected).toBeFalsy();
       expect(disconnectedState.state.state).toBe('disconnected');
@@ -205,7 +205,7 @@ describe("MCP Chrome Debugger Protocol - Tool State Management", () => {
 
       // Initially should be in connected state (not paused)
       const initialStateResult = await mcpClient.callTool("getDebuggerState");
-      const initialState = JSON.parse(initialStateResult.content[0].text);
+      const initialState = JSON.parse(initialStateResult.content[0]!.text);
 
       expect(initialState.state.isPaused).toBeFalsy();
       expect(initialState.state.state).toBe('connected');
@@ -221,7 +221,7 @@ describe("MCP Chrome Debugger Protocol - Tool State Management", () => {
 
       // Check state - should be in paused state
       const pausedStateResult = await mcpClient.callTool("getDebuggerState");
-      const pausedState = JSON.parse(pausedStateResult.content[0].text);
+      const pausedState = JSON.parse(pausedStateResult.content[0]!.text);
       // In test environment, we may not trigger actual pause state,
       // but we should verify that pause-dependent tools are correctly configured
       // When connected, stepping tools should require pause (not be enabled without pause)
@@ -257,7 +257,7 @@ describe("MCP Chrome Debugger Protocol - Tool State Management", () => {
       await debuggerHelper.connectToDebugger(port);
 
       const stateResult = await mcpClient.callTool("getDebuggerState");
-      const state = JSON.parse(stateResult.content[0].text);
+      const state = JSON.parse(stateResult.content[0]!.text);
 
       // Should show enabled domains
       expect(state.state.enabledDomains).toContain('Debugger');
@@ -272,7 +272,7 @@ describe("getDebuggerState tool", () => {
 
       expect(stateResult.isError).toBeFalsy();
 
-      const state = JSON.parse(stateResult.content[0].text);
+      const state = JSON.parse(stateResult.content[0]!.text);
 
       // Should include connection info
       expect(state.connection).toBeDefined();
@@ -339,7 +339,7 @@ describe("getDebuggerState tool", () => {
       const connectResult2 = await mcpClient.callTool("attach", { url: webSocketUrl! });
 
       expect(connectResult2.isError).toBe(true);
-      expect(connectResult2.content[0].text).toContain("disabled");
+      expect(connectResult2.content[0]!.text).toContain("disabled");
     });
   });
 });

@@ -4,9 +4,9 @@ import { setTimeout } from 'node:timers/promises';
 import type ProtocolMappingApi from 'devtools-protocol/types/protocol-mapping';
 
 export interface CDPTransportOptions {
-  host?: string;
-  port?: number;
-  target?: string | ((targets: CDP.Target[]) => CDP.Target);
+  host?: string | undefined;
+  port?: number | undefined;
+  target?: string | ((targets: CDP.Target[]) => CDP.Target) | undefined;
 }
 
 export interface CDPConnection {
@@ -56,7 +56,7 @@ export class CDPTransport extends EventEmitter {
         }
         selectedTarget = found;
       } else {
-        selectedTarget = targets[0];
+        selectedTarget = targets[0]!;
       }
 
       // Create CDP client connection

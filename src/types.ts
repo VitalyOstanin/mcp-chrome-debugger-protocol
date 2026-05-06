@@ -3,28 +3,28 @@ import type { NodeJSDebugAdapter } from "./nodejs-debug-adapter.js";
 export interface DebuggerConnection {
   adapter: NodeJSDebugAdapter | null;
   isConnected: boolean;
-  webSocketUrl?: string;
+  webSocketUrl?: string | undefined;
 }
 
 export interface TruncationOptions {
-  maxLength?: number;
-  maxDepth?: number;
-  maxArrayItems?: number;
-  maxObjectKeys?: number;
-  summary?: boolean;
+  maxLength?: number | undefined;
+  maxDepth?: number | undefined;
+  maxArrayItems?: number | undefined;
+  maxObjectKeys?: number | undefined;
+  summary?: boolean | undefined;
 }
 
 export interface LogpointHit {
   // Optional human-readable message, derived from payload when present
-  message?: string;
+  message?: string | undefined;
   // Raw payload string as sent from Runtime.bindingCalled
-  payloadRaw?: string;
+  payloadRaw?: string | undefined;
   // Parsed JSON payload, if applicable
-  payload?: unknown;
+  payload?: unknown | undefined;
   timestamp: Date;
   executionContextId: number;
-  stackTrace?: unknown;
-  level?: string;
+  stackTrace?: unknown | undefined;
+  level?: string | undefined;
 }
 
 export interface DebuggerEvent {
@@ -40,19 +40,19 @@ export interface TrackedBreakpoint {
     filePath: string;
     lineNumber: number;
     columnNumber: number;
-    condition?: string;
-    logMessage?: string;
+    condition?: string | undefined;
+    logMessage?: string | undefined;
   };
   actualLocation: {
-    scriptId?: string;
+    scriptId?: string | undefined;
     lineNumber: number;
     columnNumber: number;
   };
   sourceMapResolution: {
     used: boolean;
-    sourceMapFile?: string;
-    matchedSource?: string;
-    targetFile?: string;
+    sourceMapFile?: string | undefined;
+    matchedSource?: string | undefined;
+    targetFile?: string | undefined;
     targetLocation?: {
       lineNumber: number;
       columnNumber: number;

@@ -50,7 +50,7 @@ describe("MCP Chrome Debugger Protocol - TS Logpoint Check", () => {
       ],
     });
     const setAData = unwrapToolPayload<{ breakpoints: Array<{ verified: boolean }> }>(setA);
-    const lpA = setAData.breakpoints[0];
+    const lpA = setAData.breakpoints[0]!;
 
     expect(lpA).toBeDefined();
     expect(lpA.verified).toBe(true);
@@ -89,7 +89,7 @@ describe("MCP Chrome Debugger Protocol - TS Logpoint Check", () => {
       ],
     });
     const setBData = unwrapToolPayload<{ breakpoints: Array<{ verified: boolean }> }>(setB);
-    const lpB = setBData.breakpoints[0];
+    const lpB = setBData.breakpoints[0]!;
 
     expect(lpB).toBeDefined();
     expect(lpB.verified).toBe(true);
@@ -123,7 +123,7 @@ describe("MCP Chrome Debugger Protocol - TS Logpoint Check", () => {
     });
     // resolveGeneratedPosition path is not wrapped in withErrorHandling; it returns its own
     // {success, ...} envelope as content text, so we parse it directly.
-    const mapResData = JSON.parse(mapRes.content[0].text) as { success: boolean; sourceMapUsed?: string };
+    const mapResData = JSON.parse(mapRes.content[0]!.text) as { success: boolean; sourceMapUsed?: string };
 
     expect(mapResData.success).toBe(true);
     expect(mapResData.sourceMapUsed).toContain("index.js.map");

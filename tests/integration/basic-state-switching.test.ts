@@ -42,7 +42,7 @@ describe("MCP Chrome Debugger Protocol - Basic State Switching", () => {
       const connectResult = await globalMCPClient!.callTool("attach", {
         url: webSocketUrl!,
       });
-      const connectData = JSON.parse(connectResult.content[0].text);
+      const connectData = JSON.parse(connectResult.content[0]!.text);
 
       expect(connectData.success).toBe(true);
 
@@ -59,7 +59,7 @@ describe("MCP Chrome Debugger Protocol - Basic State Switching", () => {
       const connectResult2 = await globalMCPClient!.callTool("attach", { url: webSocketUrl! });
 
       expect(connectResult2.isError).toBe(true);
-      expect(connectResult2.content[0].text).toContain("disabled");
+      expect(connectResult2.content[0]!.text).toContain("disabled");
 
       // Check debugger state after connection
       const debuggerStateResult = await globalMCPClient!.callTool("getDebuggerState");
@@ -78,7 +78,7 @@ describe("MCP Chrome Debugger Protocol - Basic State Switching", () => {
       // After connection - try a simple tool that should work
       const disconnectTest = await globalMCPClient!.callTool("disconnect");
 
-      expect(disconnectTest.content[0].text).toContain("Disconnected");
+      expect(disconnectTest.content[0]!.text).toContain("Disconnected");
 
       // Disconnect
       await debuggerHelper.disconnectFromDebugger();
@@ -92,7 +92,7 @@ describe("MCP Chrome Debugger Protocol - Basic State Switching", () => {
       const disconnectResult = await globalMCPClient!.callTool("disconnect");
 
       expect(disconnectResult.isError).toBe(true);
-      expect(disconnectResult.content[0].text).toContain("disabled");
+      expect(disconnectResult.content[0]!.text).toContain("disabled");
 
       const breakpointResult = await globalMCPClient!.callTool("setBreakpoints", {
         source: { path: "/some/path" },
@@ -100,14 +100,14 @@ describe("MCP Chrome Debugger Protocol - Basic State Switching", () => {
       });
 
       expect(breakpointResult.isError).toBe(true);
-      expect(breakpointResult.content[0].text).toContain("disabled");
+      expect(breakpointResult.content[0]!.text).toContain("disabled");
 
       const evaluateResult = await globalMCPClient!.callTool("evaluate", {
         expression: "1 + 1",
       });
 
       expect(evaluateResult.isError).toBe(true);
-      expect(evaluateResult.content[0].text).toContain("disabled");
+      expect(evaluateResult.content[0]!.text).toContain("disabled");
     });
 
     it("should allow using connection tools when disconnected", async () => {
@@ -122,7 +122,7 @@ describe("MCP Chrome Debugger Protocol - Basic State Switching", () => {
       const connectResult = await globalMCPClient!.callTool("attach", {
         url: webSocketUrl!,
       });
-      const connectResultData = JSON.parse(connectResult.content[0].text);
+      const connectResultData = JSON.parse(connectResult.content[0]!.text);
 
       expect(connectResultData.success).toBe(true);
     });
@@ -159,7 +159,7 @@ describe("MCP Chrome Debugger Protocol - Basic State Switching", () => {
       const connectResult3 = await globalMCPClient!.callTool("attach", { url: `ws://127.0.0.1:${port}` });
 
       expect(connectResult3.isError).toBe(true);
-      expect(connectResult3.content[0].text).toContain("disabled");
+      expect(connectResult3.content[0]!.text).toContain("disabled");
 
       // Step 4: Disconnect
       await debuggerHelper.disconnectFromDebugger();
@@ -179,7 +179,7 @@ describe("MCP Chrome Debugger Protocol - Basic State Switching", () => {
       });
 
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("disabled");
+      expect(result.content[0]!.text).toContain("disabled");
     });
   });
 });

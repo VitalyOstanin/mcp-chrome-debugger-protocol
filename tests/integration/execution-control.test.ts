@@ -12,7 +12,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 interface ToolCallResult {
   content: Array<{ text: string }>;
-  isError?: boolean;
+  isError?: boolean | undefined;
 }
 
 // The manager has two response shapes:
@@ -24,7 +24,7 @@ function unwrap<T>(result: ToolCallResult): T {
     throw new Error(`tool error: ${result.content[0]?.text ?? '<no body>'}`);
   }
 
-  const parsed = JSON.parse(result.content[0].text) as { success?: boolean; error?: string; message?: string; data?: T } & Record<string, unknown>;
+  const parsed = JSON.parse(result.content[0]!.text) as { success?: boolean; error?: string; message?: string; data?: T } & Record<string, unknown>;
 
   if (parsed.success === false) {
     throw new Error(parsed.message ?? parsed.error ?? 'unknown failure');
@@ -100,7 +100,7 @@ describe("MCP Chrome Debugger Protocol - Execution Control", () => {
 
     expect(stackData.stackFrames.length).toBeGreaterThan(0);
 
-    return { topFrameId: stackData.stackFrames[0].id, bpId: bp.id, requestPromise };
+    return { topFrameId: stackData.stackFrames[0]!.id, bpId: bp.id, requestPromise };
   }
 
   it("threads returns the single Node.js Main Thread", async () => {
@@ -139,7 +139,7 @@ describe("MCP Chrome Debugger Protocol - Execution Control", () => {
 
     const stackResult = await mcpClient.callTool("stackTrace", { threadId: 1 });
     const stackData = unwrap<{ stackFrames: Array<{ name: string; line: number; source?: { path?: string } }> }>(stackResult);
-    const top = stackData.stackFrames[0];
+    const top = stackData.stackFrames[0]!;
 
     expect(top.line).toBeGreaterThanOrEqual(1);
     expect(top.source?.path).toBeDefined();
@@ -178,7 +178,7 @@ describe("MCP Chrome Debugger Protocol - Execution Control", () => {
 
     expect(scopesData.scopes.length).toBeGreaterThan(0);
 
-    const localScope = scopesData.scopes.find(s => !s.expensive) ?? scopesData.scopes[0];
+    const localScope = scopesData.scopes.find(s => !s.expensive) ?? scopesData.scopes[0]!;
 
     expect(localScope.variablesReference).toBeGreaterThan(0);
 

@@ -63,7 +63,7 @@ export class NodeDebuggerMCPServer {
     };
   }
 
-  private validateToolAvailability(toolName: string): { isEnabled: boolean; reason?: string } {
+  private validateToolAvailability(toolName: string): { isEnabled: boolean; reason?: string | undefined } {
     const toolState = this.toolStateManager.getToolState(toolName);
 
     return {
@@ -323,7 +323,7 @@ export class NodeDebuggerMCPServer {
 
           // Send notification about breakpoints creation
           try {
-            const parsedResult = JSON.parse(result.content[0].text);
+            const parsedResult = JSON.parse(result.content[0]!.text);
 
             if (parsedResult.success && parsedResult.data?.breakpoints) {
               this.sendBreakpointNotification('breakpoint_set', {

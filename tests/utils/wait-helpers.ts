@@ -1,20 +1,20 @@
 import type { MCPClient } from "./mcp-client";
 
 export interface WaitOptions {
-  timeoutMs?: number;
-  intervalMs?: number;
+  timeoutMs?: number | undefined;
+  intervalMs?: number | undefined;
 }
 
 // All MCP tools backed by withErrorHandling return { success: true, data: <T> }. A handful of
 // non-manager tools (e.g. getDebuggerState assembled inline in mcp-server.ts) still respond with
 // flat objects. unwrapToolPayload accepts both: it returns parsed.data when present, otherwise
 // the parsed object itself, so callers can rely on a single shape.
-export function unwrapToolPayload<T = unknown>(result: { content: Array<{ text: string }>; isError?: boolean }): T {
+export function unwrapToolPayload<T = unknown>(result: { content: Array<{ text: string }>; isError?: boolean | undefined }): T {
   if (result.isError) {
     throw new Error(`tool error: ${result.content[0]?.text ?? '<no body>'}`);
   }
 
-  const parsed = JSON.parse(result.content[0].text) as { success?: boolean; error?: string; message?: string; data?: T } & Record<string, unknown>;
+  const parsed = JSON.parse(result.content[0]!.text) as { success?: boolean; error?: string; message?: string; data?: T } & Record<string, unknown>;
 
   if (parsed.success === false) {
     throw new Error(parsed.message ?? parsed.error ?? 'unknown failure');

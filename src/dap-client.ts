@@ -38,7 +38,7 @@ class RingBuffer<T> {
     const out: T[] = new Array<T>(this.size);
 
     for (let i = 0; i < this.size; i++) {
-      out[i] = this.items[(this.head + i) % this.capacity];
+      out[i] = this.items[(this.head + i) % this.capacity]!;
     }
 
     return out;
@@ -432,7 +432,7 @@ export class DAPClient extends EventEmitter {
       // Fallback for inputs that aren't a full URL: pull just the port out of ":NNNN".
       const match = url.match(/:(\d+)/);
 
-      if (match) port = parseInt(match[1], 10);
+      if (match?.[1]) port = parseInt(match[1], 10);
     }
 
     return this.attachToProcess({ port, ...(address !== undefined && { address }) });
@@ -505,13 +505,13 @@ export class DAPClient extends EventEmitter {
         const fullUrlMatch = out.match(/Debugger listening on (ws:\/\/[^\s]+)/);
         const portMatch = out.match(/Debugger listening on (?:port )?(\d+)/);
 
-        if (fullUrlMatch) {
+        if (fullUrlMatch?.[1]) {
           const m = fullUrlMatch[1].match(/:(\d+)/);
 
-          if (m) detectedPort = parseInt(m[1], 10);
+          if (m?.[1]) detectedPort = parseInt(m[1], 10);
           cleanup();
           resolve(detectedPort);
-        } else if (portMatch) {
+        } else if (portMatch?.[1]) {
           detectedPort = parseInt(portMatch[1], 10);
           cleanup();
           resolve(detectedPort);
@@ -542,9 +542,9 @@ export class DAPClient extends EventEmitter {
 
   // Poll candidate inspector ports until one responds or the deadline expires.
   private async pollForInspectorPort(opts?: {
-    discoverTimeoutMs?: number;
-    probeTimeoutMs?: number;
-    ports?: number[];
+    discoverTimeoutMs?: number | undefined;
+    probeTimeoutMs?: number | undefined;
+    ports?: number[] | undefined;
   }): Promise<number | undefined> {
     const candidates: number[] = opts?.ports?.length
       ? opts.ports
@@ -572,7 +572,7 @@ export class DAPClient extends EventEmitter {
     detectedPort: number,
   ): MCPResponse {
     try {
-      const parsed = JSON.parse(attachResult.content[0].text);
+      const parsed = JSON.parse(attachResult.content[0]!.text);
 
       return createSuccessResponse({
         ...parsed,
@@ -589,7 +589,7 @@ export class DAPClient extends EventEmitter {
 
   async enableDebuggerPid(
     pid: number,
-    opts?: { discoverTimeoutMs?: number; probeTimeoutMs?: number; ports?: number[] },
+    opts?: { discoverTimeoutMs?: number | undefined; probeTimeoutMs?: number | undefined; ports?: number[] | undefined },
   ): Promise<MCPResponse> {
     try {
       let activation: 'strace' | 'poll' | 'timeout' = 'timeout';

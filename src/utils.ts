@@ -21,7 +21,7 @@ export interface MCPResponse {
 export interface ErrorResponse {
   success: false;
   error: string;
-  message?: string;
+  message?: string | undefined;
   code: string;
   details?: Record<string, unknown>;
 }

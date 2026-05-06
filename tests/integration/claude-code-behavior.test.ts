@@ -11,8 +11,8 @@ import path from 'path';
 
 interface Tool {
   name: string;
-  title?: string;
-  description?: string;
+  title?: string | undefined;
+  description?: string | undefined;
 }
 
 describe('Claude Code MCP behavior simulation', () => {
@@ -72,7 +72,7 @@ describe('Claude Code MCP behavior simulation', () => {
       // Should succeed because we're connected
       expect(logpointResult.content).toBeDefined();
 
-      const result = JSON.parse(logpointResult.content[0].text);
+      const result = JSON.parse(logpointResult.content[0]!.text);
 
       expect(result.success).toBe(true);
     });
@@ -116,8 +116,8 @@ describe('Claude Code MCP behavior simulation', () => {
         }],
       });
 
-      expect(disconnectedResult.content[0].text).toContain('disabled');
-      expect(disconnectedResult.content[0].text).toContain('Requires debugger connection');
+      expect(disconnectedResult.content[0]!.text).toContain('disabled');
+      expect(disconnectedResult.content[0]!.text).toContain('Requires debugger connection');
 
       // Step 2: Connect and try again (should work)
       const { port } = await testApp.start({ enableDebugger: true });
@@ -132,7 +132,7 @@ describe('Claude Code MCP behavior simulation', () => {
           logMessage: 'Test logpoint after connection',
         }],
       });
-      const result = JSON.parse(connectedResult.content[0].text);
+      const result = JSON.parse(connectedResult.content[0]!.text);
 
       expect(result.success).toBe(true);
     });
@@ -143,7 +143,7 @@ describe('Claude Code MCP behavior simulation', () => {
       const states = [];
       // State 1: Disconnected
       let debuggerState = await mcpClient.callTool('getDebuggerState', {});
-      let stateData = JSON.parse(debuggerState.content[0].text);
+      let stateData = JSON.parse(debuggerState.content[0]!.text);
 
       states.push({ state: stateData.state.state, enabledTools: stateData.toolsAvailability.enabled.length });
 
@@ -153,21 +153,21 @@ describe('Claude Code MCP behavior simulation', () => {
       await debuggerHelper.connectToDebugger(port);
 
       debuggerState = await mcpClient.callTool('getDebuggerState', {});
-      stateData = JSON.parse(debuggerState.content[0].text);
+      stateData = JSON.parse(debuggerState.content[0]!.text);
       states.push({ state: stateData.state.state, enabledTools: stateData.toolsAvailability.enabled.length });
 
       // State 3: Disconnected again
       await mcpClient.callTool('disconnect', {});
 
       debuggerState = await mcpClient.callTool('getDebuggerState', {});
-      stateData = JSON.parse(debuggerState.content[0].text);
+      stateData = JSON.parse(debuggerState.content[0]!.text);
       states.push({ state: stateData.state.state, enabledTools: stateData.toolsAvailability.enabled.length });
 
 
       // Verify state transitions happened
-      expect(states[0].state).toBe('disconnected');
-      expect(states[1].state).toBe('connected');
-      expect(states[2].state).toBe('disconnected');
+      expect(states[0]!.state).toBe('disconnected');
+      expect(states[1]!.state).toBe('connected');
+      expect(states[2]!.state).toBe('disconnected');
 
       // But tools list should remain constant (our workaround)
       const toolsAfterAllTransitions = await mcpClient.listTools() as Tool[];
@@ -197,7 +197,7 @@ describe('Claude Code MCP behavior simulation', () => {
           ...(toolName === 'removeBreakpoint' && { breakpointId: 123 }),
           ...(toolName === 'evaluate' && { expression: '1+1' }),
         });
-        const responseText = result.content[0].text;
+        const responseText = result.content[0]!.text;
 
         // Different tools may have different error formats, but they should indicate unavailability
         // With the new standardized format, errors are now structured JSON with success:false

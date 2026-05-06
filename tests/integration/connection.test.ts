@@ -48,14 +48,14 @@ describe("MCP Chrome Debugger Protocol - Connection Tests", () => {
       expect(result.isError).toBeFalsy();
       expect(result.content).toBeDefined();
 
-      const resultData = JSON.parse(result.content[0].text);
+      const resultData = JSON.parse(result.content[0]!.text);
 
       expect(resultData.success).toBe(true);
     }, 45000);  // Increase timeout to 45 seconds
 
     it("should fail to connect when no debugger is available", async () => {
       const result = await mcpClient.callTool("attach", { url: "ws://127.0.0.1:65000" });
-      const resultData = JSON.parse(result.content[0].text);
+      const resultData = JSON.parse(result.content[0]!.text);
 
       // Connection may fail immediately or timeout - both are acceptable
       // The important thing is we don't crash on bad URLs
@@ -80,7 +80,7 @@ describe("MCP Chrome Debugger Protocol - Connection Tests", () => {
 
       const result = await mcpClient.callTool("attach");
       // The connection may succeed or fail depending on port availability
-      const resultData = JSON.parse(result.content[0].text);
+      const resultData = JSON.parse(result.content[0]!.text);
 
       if (!resultData.success) {
         expect(resultData.success).toBe(false);
@@ -92,7 +92,7 @@ describe("MCP Chrome Debugger Protocol - Connection Tests", () => {
     it("should fail with invalid WebSocket URL", async () => {
       const url = "ws://127.0.0.1:65000";
       const result = await mcpClient.callTool("attach", { url });
-      const resultData = JSON.parse(result.content[0].text);
+      const resultData = JSON.parse(result.content[0]!.text);
 
       // Connection may fail or succeed depending on system state - just verify we get a response
       expect(typeof resultData.success).toBe('boolean');
@@ -101,7 +101,7 @@ describe("MCP Chrome Debugger Protocol - Connection Tests", () => {
     it("should handle malformed URL gracefully", async () => {
       const url = "invalid-url";
       const result = await mcpClient.callTool("attach", { url });
-      const resultData = JSON.parse(result.content[0].text);
+      const resultData = JSON.parse(result.content[0]!.text);
 
       // Malformed URLs should fail, but verify we get a proper response structure
       expect(typeof resultData.success).toBe('boolean');
@@ -126,7 +126,7 @@ describe("MCP Chrome Debugger Protocol - Connection Tests", () => {
 
       // enable_debugger_pid attempts to establish connection
       // It may succeed or fail depending on test environment
-      const resultData = JSON.parse(result.content[0].text);
+      const resultData = JSON.parse(result.content[0]!.text);
 
       expect(typeof resultData.success).toBe('boolean');
     });
@@ -151,7 +151,7 @@ describe("MCP Chrome Debugger Protocol - Connection Tests", () => {
       const result = await mcpClient.callTool("attach", {
         processId: invalidPid,
       });
-      const resultData = JSON.parse(result.content[0].text);
+      const resultData = JSON.parse(result.content[0]!.text);
 
       expect(resultData.success).toBe(false);
     });
@@ -166,14 +166,14 @@ describe("MCP Chrome Debugger Protocol - Connection Tests", () => {
       expect(webSocketUrl).toBeDefined();
 
       const connectResult = await mcpClient.callTool("attach", { url: webSocketUrl! });
-      const connectData = JSON.parse(connectResult.content[0].text);
+      const connectData = JSON.parse(connectResult.content[0]!.text);
 
       expect(connectData.success).toBe(true);
 
       const result = await mcpClient.callTool("disconnect");
 
       expect(result.content).toBeDefined();
-      expect(result.content[0].text).toContain("Disconnected");
+      expect(result.content[0]!.text).toContain("Disconnected");
     });
 
     it("should handle disconnect when not connected gracefully", async () => {
@@ -181,7 +181,7 @@ describe("MCP Chrome Debugger Protocol - Connection Tests", () => {
       const disconnectResult = await mcpClient.callTool("disconnect");
 
       expect(disconnectResult.isError).toBe(true);
-      expect(disconnectResult.content[0].text).toContain("disabled");
+      expect(disconnectResult.content[0]!.text).toContain("disabled");
     });
   });
 
@@ -195,7 +195,7 @@ describe("MCP Chrome Debugger Protocol - Connection Tests", () => {
 
       // Connect using WebSocket URL
       const connectResult = await mcpClient.callTool("attach", { url: webSocketUrl! });
-      const connectData = JSON.parse(connectResult.content[0].text);
+      const connectData = JSON.parse(connectResult.content[0]!.text);
 
       expect(connectData.success).toBe(true);
 
@@ -216,7 +216,7 @@ describe("MCP Chrome Debugger Protocol - Connection Tests", () => {
       });
 
       expect(evaluateResult2.isError).toBe(true);
-      expect(evaluateResult2.content[0].text).toContain("disabled");
+      expect(evaluateResult2.content[0]!.text).toContain("disabled");
     });
 
     it("should handle reconnection after disconnect", async () => {
@@ -228,7 +228,7 @@ describe("MCP Chrome Debugger Protocol - Connection Tests", () => {
 
       // First connection
       const connectResult1 = await mcpClient.callTool("attach", { url: webSocketUrl! });
-      const connectData1 = JSON.parse(connectResult1.content[0].text);
+      const connectData1 = JSON.parse(connectResult1.content[0]!.text);
 
       expect(connectData1.success).toBe(true);
 
@@ -244,7 +244,7 @@ describe("MCP Chrome Debugger Protocol - Connection Tests", () => {
 
       // Reconnect
       const connectResult2 = await mcpClient.callTool("attach", { url: webSocketUrl! });
-      const connectData2 = JSON.parse(connectResult2.content[0].text);
+      const connectData2 = JSON.parse(connectResult2.content[0]!.text);
 
       expect(connectData2.success).toBe(true);
 
@@ -257,7 +257,7 @@ describe("MCP Chrome Debugger Protocol - Connection Tests", () => {
   describe("Error handling", () => {
     it("should provide meaningful error messages for connection failures", async () => {
       const result = await mcpClient.callTool("attach", { url: "ws://127.0.0.1:65000" });
-      const resultData = JSON.parse(result.content[0].text);
+      const resultData = JSON.parse(result.content[0]!.text);
 
       // Connection failures should be handled gracefully
       expect(typeof resultData.success).toBe('boolean');
@@ -266,7 +266,7 @@ describe("MCP Chrome Debugger Protocol - Connection Tests", () => {
     it("should handle network timeouts gracefully", async () => {
       const url = "ws://192.0.2.1:9229"; // Non-routable IP for timeout
       const result = await mcpClient.callTool("attach", { url });
-      const resultData = JSON.parse(result.content[0].text);
+      const resultData = JSON.parse(result.content[0]!.text);
 
       // Network timeouts should be handled without crashing
       expect(typeof resultData.success).toBe('boolean');

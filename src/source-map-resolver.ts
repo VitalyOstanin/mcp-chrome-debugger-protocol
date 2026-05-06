@@ -11,8 +11,8 @@ export interface SourceMapResolution {
   targetColumnNumber: number;
   sourceMapInfo: {
     success: boolean;
-    sourceMapUsed?: string;
-    matchedSource?: string;
+    sourceMapUsed?: string | undefined;
+    matchedSource?: string | undefined;
   };
 }
 
@@ -189,7 +189,7 @@ export class SourceMapResolver {
         }
 
         const resolveResult = await this.resolveGeneratedPosition(relativePath, lineNumber, columnNumber, sourceMapPaths);
-        const resolveData = JSON.parse(resolveResult.content[0].text);
+        const resolveData = JSON.parse(resolveResult.content[0]!.text);
 
         if (resolveData.success) {
           sourceMapInfo = {

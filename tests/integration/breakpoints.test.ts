@@ -11,7 +11,7 @@ interface BreakpointResponse {
   id: number;
   verified: boolean;
   line: number;
-  column?: number;
+  column?: number | undefined;
   source?: {
     name: string;
     path: string;
@@ -20,13 +20,13 @@ interface BreakpointResponse {
 
 interface StandardResponse<T = unknown> {
   success: boolean;
-  error?: string;
-  data?: T;
+  error?: string | undefined;
+  data?: T | undefined;
 }
 
 // Helper function to parse standardized tool responses
 function parseToolResponse<T = unknown>(result: { content: Array<{ text: string }> }): T {
-  const response: unknown = JSON.parse(result.content[0].text);
+  const response: unknown = JSON.parse(result.content[0]!.text);
 
   // Handle new standardized response format
   if (typeof response === 'object' && response !== null && 'success' in response) {
@@ -122,7 +122,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
         }],
       });
       const breakpointsData = parseToolResponse<{ breakpoints: BreakpointResponse[] }>(result);
-      const breakpoint = breakpointsData.breakpoints[0];
+      const breakpoint = breakpointsData.breakpoints[0]!;
 
       expect(breakpoint.id).toBeDefined();
       expect(breakpoint.verified).toBe(true);
@@ -145,7 +145,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
       });
       // CDP actually creates breakpoints for invalid paths but without valid script locations
       const breakpointsData = parseToolResponse<{ breakpoints: BreakpointResponse[] }>(result);
-      const response = breakpointsData.breakpoints[0];
+      const response = breakpointsData.breakpoints[0]!;
 
       // CDP creates a breakpoint - in some cases it may still return the path even for invalid files
       expect(response.id).toBeDefined();
@@ -171,7 +171,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
       });
       // CDP creates a breakpoint even for invalid line numbers
       const breakpointsData = parseToolResponse<{ breakpoints: BreakpointResponse[] }>(result);
-      const response = breakpointsData.breakpoints[0];
+      const response = breakpointsData.breakpoints[0]!;
 
       expect(response.id).toBeDefined();
 
@@ -228,7 +228,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
         }],
       });
       const breakpointsData = parseToolResponse<{ breakpoints: BreakpointResponse[] }>(result);
-      const logpoint = breakpointsData.breakpoints[0];
+      const logpoint = breakpointsData.breakpoints[0]!;
 
       expect(logpoint.id).toBeDefined();
       expect(logpoint.verified).toBe(true);
@@ -278,7 +278,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
       });
       // CDP creates logpoints for invalid paths but without valid script locations
       const breakpointsData = parseToolResponse<{ breakpoints: BreakpointResponse[] }>(result);
-      const response = breakpointsData.breakpoints[0];
+      const response = breakpointsData.breakpoints[0]!;
 
       expect(response.id).toBeDefined();
 
@@ -465,7 +465,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
 
       // Check debugger state to see if we're paused
       const debuggerState = await mcpClient.callTool("getDebuggerState");
-      const stateData = JSON.parse(debuggerState.content[0].text);
+      const stateData = JSON.parse(debuggerState.content[0]!.text);
 
       if (stateData.state.isPaused) {
         // If paused, we can get call stack
@@ -747,7 +747,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
 
       expect(clearResult.isError).toBeFalsy();
 
-      const clearEnvelope = JSON.parse(clearResult.content[0].text) as { success: boolean };
+      const clearEnvelope = JSON.parse(clearResult.content[0]!.text) as { success: boolean };
 
       expect(clearEnvelope.success).toBe(true);
 
@@ -792,7 +792,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
 
       // Check if we're paused and resume if needed
       const debuggerState = await mcpClient.callTool("getDebuggerState");
-      const stateData = JSON.parse(debuggerState.content[0].text);
+      const stateData = JSON.parse(debuggerState.content[0]!.text);
 
       if (stateData.state.isPaused) {
         // Resume if paused
@@ -827,7 +827,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
       });
 
       expect(breakpointResult.isError).toBe(true);
-      expect(breakpointResult.content[0].text).toContain("disabled");
+      expect(breakpointResult.content[0]!.text).toContain("disabled");
     });
 
     it("should handle malformed expressions in logpoints", async () => {
@@ -850,7 +850,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
       });
       // Should still create the logpoint, even if expression is invalid
       const breakpointsData = parseToolResponse<{ breakpoints: BreakpointResponse[] }>(result);
-      const logpoint = breakpointsData.breakpoints[0];
+      const logpoint = breakpointsData.breakpoints[0]!;
 
       expect(logpoint.id).toBeDefined();
 
@@ -878,7 +878,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
       });
       // Should still create the breakpoint, even if condition is invalid
       const breakpointsData = parseToolResponse<{ breakpoints: BreakpointResponse[] }>(result);
-      const breakpoint = breakpointsData.breakpoints[0];
+      const breakpoint = breakpointsData.breakpoints[0]!;
 
       expect(breakpoint.id).toBeDefined();
 
@@ -905,7 +905,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
         }],
       });
       const breakpointsData = parseToolResponse<{ breakpoints: BreakpointResponse[] }>(result);
-      const response = breakpointsData.breakpoints[0];
+      const response = breakpointsData.breakpoints[0]!;
 
       expect(response.id).toBeDefined();
       // Verify DAP response structure for TypeScript files
@@ -931,7 +931,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
         }],
       });
       const breakpointsData = parseToolResponse<{ breakpoints: BreakpointResponse[] }>(result);
-      const response = breakpointsData.breakpoints[0];
+      const response = breakpointsData.breakpoints[0]!;
 
       expect(response.id).toBeDefined();
       // Verify DAP response structure for logpoint
@@ -1031,7 +1031,7 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
         originalLine: 57,
         originalColumn: 1,
       });
-      const resolveResponse = JSON.parse(resolveResult.content[0].text);
+      const resolveResponse = JSON.parse(resolveResult.content[0]!.text);
 
       // Expect error with detailed debugging information
       expect(resolveResponse.error).toBe("No matching source found in available source maps");

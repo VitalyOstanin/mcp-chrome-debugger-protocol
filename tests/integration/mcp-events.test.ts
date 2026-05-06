@@ -286,7 +286,7 @@ describe("MCP Chrome Debugger Protocol - MCP Event Notifications", () => {
       // Initial state should be disconnected
       // Initial state should be disconnected
       const initialState = await mcpClient.callTool("getDebuggerState");
-      const initialData = JSON.parse(initialState.content[0].text);
+      const initialData = JSON.parse(initialState.content[0]!.text);
 
       expect(initialData.connection.isConnected).toBe(false);
 
@@ -295,7 +295,7 @@ describe("MCP Chrome Debugger Protocol - MCP Event Notifications", () => {
 
       // Connected state should be true
       const connectedState = await mcpClient.callTool("getDebuggerState");
-      const connectedData = JSON.parse(connectedState.content[0].text);
+      const connectedData = JSON.parse(connectedState.content[0]!.text);
 
       expect(connectedData.connection.isConnected).toBe(true);
       expect(connectedData.state.state).toBe('connected');
@@ -305,7 +305,7 @@ describe("MCP Chrome Debugger Protocol - MCP Event Notifications", () => {
 
       // State should be back to disconnected
       const disconnectedState = await mcpClient.callTool("getDebuggerState");
-      const disconnectedData = JSON.parse(disconnectedState.content[0].text);
+      const disconnectedData = JSON.parse(disconnectedState.content[0]!.text);
 
       expect(disconnectedData.connection.isConnected).toBe(false);
       expect(disconnectedData.state.state).toBe('disconnected');

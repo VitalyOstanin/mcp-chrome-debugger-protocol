@@ -1,12 +1,12 @@
 export interface ToolStateInfo {
   isEnabled: boolean;
-  reason?: string;
+  reason?: string | undefined;
 }
 
 interface ToolRule {
-  requiresConnection?: boolean;
-  requiresPause?: boolean;
-  onlyWhenDisconnected?: boolean;
+  requiresConnection?: boolean | undefined;
+  requiresPause?: boolean | undefined;
+  onlyWhenDisconnected?: boolean | undefined;
 }
 
 // Simple rules for each tool
@@ -86,7 +86,7 @@ export class ToolStateManager {
   isToolEnabled(toolName: string): boolean {
     const rule = TOOL_RULES[toolName];
 
-    if (!(toolName in TOOL_RULES)) {
+    if (!rule) {
       return false;
     }
 
@@ -101,7 +101,7 @@ export class ToolStateManager {
   getToolState(toolName: string): ToolStateInfo {
     const rule = TOOL_RULES[toolName];
 
-    if (!(toolName in TOOL_RULES)) {
+    if (!rule) {
       return {
         isEnabled: false,
         reason: `Unknown tool: ${toolName}`,
@@ -109,14 +109,16 @@ export class ToolStateManager {
     }
 
     const isEnabled = this.isToolEnabled(toolName);
+    const result: ToolStateInfo = { isEnabled };
 
-    return {
-      isEnabled,
-      reason: isEnabled ? undefined : this.getDisabledReason(toolName, rule),
-    };
+    if (!isEnabled) {
+      result.reason = this.getDisabledReason(toolName, rule);
+    }
+
+    return result;
   }
 
-  private getDisabledReason(toolName: string, rule: ToolRule): string {
+  private getDisabledReason(_toolName: string, rule: ToolRule): string {
     if (rule.onlyWhenDisconnected && this.isConnected) {
       return 'Only available when disconnected from debugger';
     }

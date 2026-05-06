@@ -12,9 +12,9 @@ describe('createSuccessResponse', () => {
     const response = createSuccessResponse({ value: 42 });
 
     expect(response.content).toHaveLength(1);
-    expect(response.content[0].type).toBe('text');
+    expect(response.content[0]!.type).toBe('text');
 
-    const parsed = JSON.parse(response.content[0].text);
+    const parsed = JSON.parse(response.content[0]!.text);
 
     expect(parsed).toEqual({ success: true, data: { value: 42 } });
   });
@@ -23,14 +23,14 @@ describe('createSuccessResponse', () => {
 describe('createErrorResponse', () => {
   it('serialises error with default code', () => {
     const response = createErrorResponse('boom');
-    const parsed = JSON.parse(response.content[0].text);
+    const parsed = JSON.parse(response.content[0]!.text);
 
     expect(parsed).toEqual({ success: false, error: 'boom', code: 'TOOL_ERROR' });
   });
 
   it('omits absent message and details from the payload', () => {
     const response = createErrorResponse('e');
-    const parsed = JSON.parse(response.content[0].text);
+    const parsed = JSON.parse(response.content[0]!.text);
 
     expect('message' in parsed).toBe(false);
     expect('details' in parsed).toBe(false);
@@ -38,7 +38,7 @@ describe('createErrorResponse', () => {
 
   it('includes message, code and details when provided', () => {
     const response = createErrorResponse('e', 'why', 'CUSTOM', { id: 1 });
-    const parsed = JSON.parse(response.content[0].text);
+    const parsed = JSON.parse(response.content[0]!.text);
 
     expect(parsed).toEqual({
       success: false,
@@ -53,7 +53,7 @@ describe('createErrorResponse', () => {
 describe('withErrorHandling', () => {
   it('returns success response when operation resolves', async () => {
     const response = await withErrorHandling(async () => ({ ok: true }), { operation: 'noop' });
-    const parsed = JSON.parse(response.content[0].text);
+    const parsed = JSON.parse(response.content[0]!.text);
 
     expect(parsed).toEqual({ success: true, data: { ok: true } });
   });
@@ -62,7 +62,7 @@ describe('withErrorHandling', () => {
     const response = await withErrorHandling(async () => {
       throw new Error('kaboom');
     }, { operation: 'fail', extra: 'ctx' });
-    const parsed = JSON.parse(response.content[0].text);
+    const parsed = JSON.parse(response.content[0]!.text);
 
     expect(parsed.success).toBe(false);
     expect(parsed.error).toBe('Failed to fail');
@@ -75,7 +75,7 @@ describe('withErrorHandling', () => {
     const response = await withErrorHandling(async () => {
       throw 'plain string';
     }, { operation: 'noop' });
-    const parsed = JSON.parse(response.content[0].text);
+    const parsed = JSON.parse(response.content[0]!.text);
 
     expect(parsed.message).toBe('plain string');
   });

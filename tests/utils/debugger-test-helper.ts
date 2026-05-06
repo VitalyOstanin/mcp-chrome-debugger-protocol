@@ -4,14 +4,14 @@ import type { TestAppManager } from "./test-app-manager";
 export interface ScriptInfo {
   scriptId: string;
   url: string;
-  lineCount?: number;
+  lineCount?: number | undefined;
 }
 
 export interface BreakpointInfo {
   id: number;
   verified: boolean;
   line: number;
-  column?: number;
+  column?: number | undefined;
   source?: {
     name: string;
     path: string;
@@ -19,11 +19,11 @@ export interface BreakpointInfo {
 }
 
 interface PendingBreakpoint {
-  id?: number;
+  id?: number | undefined;
   line: number;
-  column?: number;
-  condition?: string;
-  logMessage?: string;
+  column?: number | undefined;
+  condition?: string | undefined;
+  logMessage?: string | undefined;
 }
 
 export class DebuggerTestHelper {
@@ -71,8 +71,8 @@ export class DebuggerTestHelper {
 
       // Update id mapping and refresh internal state with server-assigned ids.
       for (let i = 0; i < returned.length; i++) {
-        const local = list[i];
-        const remote = returned[i];
+        const local = list[i]!;
+        const remote = returned[i]!;
 
         local.id = remote.id;
         this.idToSource.set(remote.id, filePath);
@@ -116,7 +116,7 @@ export class DebuggerTestHelper {
         }
 
         // Use the first available target's WebSocket URL
-        const webSocketUrl = targets[0].webSocketDebuggerUrl;
+        const webSocketUrl = targets[0]!.webSocketDebuggerUrl;
 
         if (!webSocketUrl) {
           throw new Error('No WebSocket debugger URL found');
@@ -206,7 +206,7 @@ export class DebuggerTestHelper {
       throw new Error("setBreakpoints did not return the newly added breakpoint");
     }
 
-    return returned[list.length - 1];
+    return returned[list.length - 1]!;
   }
 
   async setLogpoint(
@@ -232,7 +232,7 @@ export class DebuggerTestHelper {
       throw new Error("setBreakpoints did not return the newly added logpoint");
     }
 
-    return returned[list.length - 1];
+    return returned[list.length - 1]!;
   }
 
   async removeBreakpoint(breakpointId: number): Promise<void> {
