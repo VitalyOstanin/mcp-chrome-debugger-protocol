@@ -589,11 +589,14 @@ export class NodeDebuggerMCPServer {
         inputSchema: {
           generatedLine: lineNumberSchema.describe("Line number in compiled JavaScript file (1-based)"),
           generatedColumn: columnNumberSchema.describe("Column number in compiled JavaScript file (1-based)"),
-          sourceMapPaths: z.array(z.string()).optional().describe("Optional array of .map file paths (defaults to build directory search)"),
+          sourceMapPaths: z.array(z.string()).optional().describe("Optional array of .map file paths (defaults to build directory search). Pass [] to skip autodiscovery."),
+          generatedSourcePath: z.string().optional().describe("Absolute path of the generated .js file. Used to anchor source-map autodiscovery to the right project root when sourceMapPaths is omitted."),
         },
       },
-      async ({ generatedLine, generatedColumn, sourceMapPaths }) =>
-        this.runOpenTool(() => this.debuggerManager.resolveOriginalPosition(generatedLine, generatedColumn, sourceMapPaths)),
+      async ({ generatedLine, generatedColumn, sourceMapPaths, generatedSourcePath }) =>
+        this.runOpenTool(() =>
+          this.debuggerManager.resolveOriginalPosition(generatedLine, generatedColumn, sourceMapPaths, generatedSourcePath),
+        ),
     );
 
     this.server.registerTool(

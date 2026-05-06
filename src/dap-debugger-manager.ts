@@ -307,8 +307,18 @@ export class DAPDebuggerManager {
     }, { operation: 'clear debugger events' });
   }
 
-  async resolveOriginalPosition(generatedLine: number, generatedColumn: number, sourceMapPaths?: string[]) {
-    const originalPosition = await this.sourceMapResolver.resolveOriginalPosition(generatedLine, generatedColumn, sourceMapPaths);
+  async resolveOriginalPosition(
+    generatedLine: number,
+    generatedColumn: number,
+    sourceMapPaths?: string[],
+    generatedSourcePath?: string,
+  ) {
+    const originalPosition = await this.sourceMapResolver.resolveOriginalPosition(
+      generatedLine,
+      generatedColumn,
+      sourceMapPaths,
+      generatedSourcePath,
+    );
 
     return originalPosition;
   }

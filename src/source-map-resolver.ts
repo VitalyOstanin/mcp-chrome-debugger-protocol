@@ -37,6 +37,44 @@ interface SourceMapListing {
   expiresAt: number;
 }
 
+// Wrap a JSON payload in the MCP response envelope used by every public method
+// of SourceMapResolver. Centralising this kills the "{ content: [{ type, text:
+// JSON.stringify(...) }] }" boilerplate that previously appeared seven times.
+function srMapTextResponse(payload: unknown): { content: Array<{ type: string; text: string }> } {
+  return {
+    content: [{ type: "text", text: JSON.stringify(payload) }],
+  };
+}
+
+// Validate MCP/DAP coordinates (1-based lines AND columns). Returns null when
+// inputs are valid; returns the error envelope to bubble straight back to the
+// caller otherwise. Both resolveGeneratedPosition and resolveOriginalPosition
+// need exactly this check, hence the shared helper.
+function validateMcpCoordinates(
+  line: number,
+  column: number,
+): { content: Array<{ type: string; text: string }> } | null {
+  if (line < 1) {
+    return srMapTextResponse({
+      success: false,
+      error: "Invalid line number: lines must be 1-based (start at 1)",
+      receivedLine: line,
+      coordinateSystem: "MCP/DAP: 1-based lines, 1-based columns",
+    });
+  }
+
+  if (column < 1) {
+    return srMapTextResponse({
+      success: false,
+      error: "Invalid column number: columns must be 1-based (start at 1)",
+      receivedColumn: column,
+      coordinateSystem: "MCP/DAP: 1-based lines, 1-based columns",
+    });
+  }
+
+  return null;
+}
+
 export class SourceMapResolver {
   // mapFile -> { mtime, parsed TraceMap }. Trim oldest entries past the limit so a long
   // session debugging across many bundles doesn't grow unbounded. mtime+size tracking
@@ -156,12 +194,16 @@ export class SourceMapResolver {
   // Sibling build dirs next to a TS source under <root>/src/.../foo.ts produce
   // <root>/(dist|build|out|lib)/foo.js.map -- collect those candidates without walking.
   private siblingMapCandidates(originalSourcePath: string): string[] {
-    const idx = originalSourcePath.lastIndexOf(SOURCE_DIR_MARKER);
+    // Normalise to forward slashes so the marker also matches Windows-style
+    // paths ("...\\src\\foo.ts"). Without this, the cheap sibling-lookup
+    // shortcut quietly degrades to the full build-dir scan on Windows.
+    const normalised = originalSourcePath.replace(/\\/g, '/');
+    const idx = normalised.lastIndexOf(SOURCE_DIR_MARKER);
 
     if (idx === -1) return [];
 
-    const baseRoot = originalSourcePath.substring(0, idx);
-    const fileBase = originalSourcePath.substring(idx + SOURCE_DIR_MARKER.length).replace(/\\/g, '/');
+    const baseRoot = normalised.substring(0, idx);
+    const fileBase = normalised.substring(idx + SOURCE_DIR_MARKER.length);
     const baseName = fileBase.split('/').pop() ?? '';
 
     if (!baseName) return [];
@@ -273,45 +315,15 @@ export class SourceMapResolver {
     sourceMapPaths?: string[],
     originalSourcePath?: string,
   ) {
-    // Validate MCP/DAP coordinate system: both lines and columns are 1-based
-    if (originalLine < 1) {
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            success: false,
-            error: "Invalid line number: lines must be 1-based (start at 1)",
-            receivedLine: originalLine,
-            coordinateSystem: "MCP/DAP: 1-based lines, 1-based columns",
-          }),
-        }],
-      };
-    }
+    const coordError = validateMcpCoordinates(originalLine, originalColumn);
 
-    if (originalColumn < 1) {
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            success: false,
-            error: "Invalid column number: columns must be 1-based (start at 1)",
-            receivedColumn: originalColumn,
-            coordinateSystem: "MCP/DAP: 1-based lines, 1-based columns",
-          }),
-        }],
-      };
-    }
+    if (coordError) return coordError;
 
     if (!originalSource) {
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            success: false,
-            error: "Invalid originalSource: must be a non-empty path or filename",
-          }),
-        }],
-      };
+      return srMapTextResponse({
+        success: false,
+        error: "Invalid originalSource: must be a non-empty path or filename",
+      });
     }
 
     try {
@@ -341,20 +353,15 @@ export class SourceMapResolver {
           });
 
           if (generatedPosition.line !== null) {
-            return {
-              content: [{
-                type: "text",
-                text: JSON.stringify({
-                  success: true,
-                  generatedPosition: {
-                    line: generatedPosition.line,
-                    column: generatedPosition.column + 1,
-                  },
-                  sourceMapUsed: mapFile,
-                  matchedSource,
-                }),
-              }],
-            };
+            return srMapTextResponse({
+              success: true,
+              generatedPosition: {
+                line: generatedPosition.line,
+                column: generatedPosition.column + 1,
+              },
+              sourceMapUsed: mapFile,
+              matchedSource,
+            });
           }
         }
       }
@@ -362,74 +369,41 @@ export class SourceMapResolver {
       // Suggestions are only useful when nothing matched -- compute them lazily here.
       const suggestions = this.suggestSimilarSources(availableSources, originalSource);
 
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            success: false,
-            error: "No matching source found in available source maps",
-            searchedMaps: mapFiles.length,
-            originalSource,
-            coordinateSystem: "MCP/DAP coordinates: 1-based lines, 1-based columns",
-            inputCoordinates: { line: originalLine, column: originalColumn },
-            availableSources,
-            suggestions,
-          }),
-        }],
-      };
+      return srMapTextResponse({
+        success: false,
+        error: "No matching source found in available source maps",
+        searchedMaps: mapFiles.length,
+        originalSource,
+        coordinateSystem: "MCP/DAP coordinates: 1-based lines, 1-based columns",
+        inputCoordinates: { line: originalLine, column: originalColumn },
+        availableSources,
+        suggestions,
+      });
     } catch (error) {
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            success: false,
-            error: "Failed to resolve generated position",
-            message: error instanceof Error ? error.message : String(error),
-          }),
-        }],
-      };
+      return srMapTextResponse({
+        success: false,
+        error: "Failed to resolve generated position",
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
-  async resolveOriginalPosition(generatedLine: number, generatedColumn: number, sourceMapPaths?: string[]) {
-    // Validate MCP/DAP coordinate system: both lines and columns are 1-based
-    if (generatedLine < 1) {
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            success: false,
-            error: "Invalid line number: lines must be 1-based (start at 1)",
-            receivedLine: generatedLine,
-            coordinateSystem: "MCP/DAP: 1-based lines, 1-based columns",
-          }),
-        }],
-      };
-    }
+  async resolveOriginalPosition(
+    generatedLine: number,
+    generatedColumn: number,
+    sourceMapPaths?: string[],
+    // Optional anchor used to locate the project root when the caller did not
+    // pass an explicit sourceMapPaths list. Without this, autodiscovery walks
+    // process.cwd(), which only happens to be the right project when the MCP
+    // server was launched from there.
+    generatedSourcePath?: string,
+  ) {
+    const coordError = validateMcpCoordinates(generatedLine, generatedColumn);
 
-    if (generatedColumn < 1) {
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            success: false,
-            error: "Invalid column number: columns must be 1-based (start at 1)",
-            receivedColumn: generatedColumn,
-            coordinateSystem: "MCP/DAP: 1-based lines, 1-based columns",
-          }),
-        }],
-      };
-    }
+    if (coordError) return coordError;
 
     try {
-      let mapFiles: string[];
-
-      if (sourceMapPaths) {
-        mapFiles = sourceMapPaths.filter(path => existsSync(path));
-      } else {
-        // Use consistent search strategy as resolveGeneratedPosition (async)
-        mapFiles = await this.findSourceMapsInDirs([process.cwd()]);
-      }
+      const mapFiles = await this.collectMapFilesForResolve(sourceMapPaths, generatedSourcePath);
 
       for (const mapFile of mapFiles) {
         const cached = await this.getTraceMap(mapFile);
@@ -444,47 +418,32 @@ export class SourceMapResolver {
         });
 
         if (originalPosition.source) {
-          return {
-            content: [{
-              type: "text",
-              text: JSON.stringify({
-                success: true,
-                originalPosition: {
-                  source: originalPosition.source,
-                  line: originalPosition.line,
-                  column: originalPosition.column + 1,
-                  name: originalPosition.name,
-                },
-                sourceMapUsed: mapFile,
-              }),
-            }],
-          };
+          return srMapTextResponse({
+            success: true,
+            originalPosition: {
+              source: originalPosition.source,
+              line: originalPosition.line,
+              column: originalPosition.column + 1,
+              name: originalPosition.name,
+            },
+            sourceMapUsed: mapFile,
+          });
         }
       }
 
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            success: false,
-            error: "No original position found",
-            searchedMaps: mapFiles.length,
-            coordinateSystem: "MCP/DAP coordinates: 1-based lines, 1-based columns",
-            inputCoordinates: { line: generatedLine, column: generatedColumn },
-          }),
-        }],
-      };
+      return srMapTextResponse({
+        success: false,
+        error: "No original position found",
+        searchedMaps: mapFiles.length,
+        coordinateSystem: "MCP/DAP coordinates: 1-based lines, 1-based columns",
+        inputCoordinates: { line: generatedLine, column: generatedColumn },
+      });
     } catch (error) {
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            success: false,
-            error: "Failed to resolve original position",
-            message: error instanceof Error ? error.message : String(error),
-          }),
-        }],
-      };
+      return srMapTextResponse({
+        success: false,
+        error: "Failed to resolve original position",
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -492,7 +451,10 @@ export class SourceMapResolver {
     sourceMapPaths: string[] | undefined,
     originalSourcePath: string | undefined,
   ): Promise<string[]> {
-    if (sourceMapPaths?.length) {
+    // Honour an explicit list (including the empty array). `[]` means "do not
+    // discover, just use these" -- callers rely on this to opt out of the
+    // process.cwd() autodiscovery that would otherwise leak unrelated maps.
+    if (sourceMapPaths !== undefined) {
       return sourceMapPaths.filter(path => existsSync(path));
     }
 
