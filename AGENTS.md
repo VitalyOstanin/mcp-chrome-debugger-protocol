@@ -44,6 +44,14 @@
 - Commits: Imperative, concise subject; describe why and what (scope-based messages welcome).
 - PRs: Include purpose, summary of changes, testing notes, and links to issues. Add reproduction steps and screenshots/logs for debugger flows where useful.
 
+### Git hooks
+This project intentionally ships **no client-side Git hooks** (no `husky`, no `simple-git-hooks`, no `lint-staged`). The reasoning:
+- `.github/workflows/node.js.yml` runs `lint`, `typecheck`, `build`, unit + integration tests on every PR and on `master` pushes — the same gate from a clean machine.
+- Hook tooling is opt-in per-clone (each contributor must run a post-clone setup) and tends to drift; CI is the single source of truth for the merge gate.
+- For pre-push verification, run `npm run lint && npm run build && npm test` locally. The `dev:test` helper exercises the integration fixture without committing.
+
+If you want a personal pre-commit gate, configure your Git client (or your editor's "format on save") to run `npm run lint:fix` — do not add a checked-in hook configuration.
+
 ## Security & Configuration Tips
 - Do not commit secrets or environment-specific tokens. Scripts may touch local debug ports (9229+); verify before sharing logs.
 - `node --inspect` defaults to 127.0.0.1 — do not switch to `--inspect=0.0.0.0` on shared hosts; `Runtime.evaluate` over CDP is unauthenticated RCE.

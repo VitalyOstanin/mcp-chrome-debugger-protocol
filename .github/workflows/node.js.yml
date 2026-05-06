@@ -53,23 +53,6 @@ jobs:
     - run: npm run build
     - run: npm run test:coverage
 
-    - name: Upload coverage to Codecov
-      # Run on a single matrix entry — uploading the same report twice
-      # under different Node versions just creates noise on the Codecov side
-      # without changing what we measure.
-      if: matrix.node-version == '22.x'
-      # codecov/codecov-action pinned to v6.0.0
-      uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2
-      with:
-        files: ./coverage/lcov.info
-        flags: unit
-        # Token is optional for public repos but Codecov v6 strongly
-        # recommends it. Configure CODECOV_TOKEN under Settings → Secrets.
-        token: ${{ secrets.CODECOV_TOKEN }}
-        # Don't fail the build on Codecov outages — coverage drift is
-        # signal, not a release blocker.
-        fail_ci_if_error: false
-
     - name: Run integration tests
       # Step-level cap: integration normally finishes in ~9 min on CI. If it
       # hangs (real Node.js inspector debuggee + sockets), fail the step at 18

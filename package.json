@@ -25,6 +25,7 @@
     "test:integration": "NODE_OPTIONS='--max-old-space-size=2048' timeout 30m vitest run --config vitest.integration.config.ts",
     "test:integration:watch": "NODE_OPTIONS='--max-old-space-size=2048' vitest --config vitest.integration.config.ts",
     "test:all": "npm test && npm run test:integration",
+    "bench": "NODE_OPTIONS='--max-old-space-size=1024' vitest bench --run",
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
     "lint:fix": "eslint . --fix --cache --cache-location node_modules/.cache/eslint/",
     "prepublishOnly": "npm run build"
