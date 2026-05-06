@@ -18,11 +18,71 @@ export interface BreakpointInfo {
   };
 }
 
+interface PendingBreakpoint {
+  id?: number;
+  line: number;
+  column?: number;
+  condition?: string;
+  logMessage?: string;
+}
+
 export class DebuggerTestHelper {
+  // Per-source list of breakpoints we have asked the server to set. DAP setBreakpoints
+  // replaces ALL breakpoints for the source, so each add/remove must re-send the full list
+  // -- mirroring how real DAP clients (VS Code) work. The previous helper sent one BP at a
+  // time and accidentally relied on the broken removeBreakpoint to clear the survivors.
+  private readonly breakpointsBySource = new Map<string, PendingBreakpoint[]>();
+  private readonly idToSource = new Map<number, string>();
+
   constructor(
     private readonly mcpClient: MCPClient,
     private readonly testApp: TestAppManager,
   ) {}
+
+  private async syncBreakpointsForFile(filePath: string): Promise<BreakpointInfo[]> {
+    const list = this.breakpointsBySource.get(filePath) ?? [];
+    const breakpoints = list.map(bp => {
+      const out: { line: number; column?: number; condition?: string; logMessage?: string } = { line: bp.line };
+
+      if (bp.column !== undefined) out.column = bp.column;
+      if (bp.condition !== undefined) out.condition = bp.condition;
+      if (bp.logMessage !== undefined) out.logMessage = bp.logMessage;
+
+      return out;
+    });
+    const result = await this.mcpClient.callTool("setBreakpoints", {
+      source: { path: filePath },
+      breakpoints,
+    });
+
+    if (result.isError || !result.content[0]) {
+      throw new Error("Failed to set breakpoints");
+    }
+
+    try {
+      const response = JSON.parse(result.content[0].text);
+
+      if (response.error || (response.success === false)) {
+        throw new Error(response.message ?? response.error);
+      }
+
+      const data = response.success ? response.data : response;
+      const returned: BreakpointInfo[] = data.breakpoints ?? [];
+
+      // Update id mapping and refresh internal state with server-assigned ids.
+      for (let i = 0; i < returned.length; i++) {
+        const local = list[i];
+        const remote = returned[i];
+
+        local.id = remote.id;
+        this.idToSource.set(remote.id, filePath);
+      }
+
+      return returned;
+    } catch (error) {
+      throw new Error(`Failed to parse breakpoint response: ${error}`, { cause: error });
+    }
+  }
 
   async connectToDebugger(port?: number): Promise<void> {
     let result;
@@ -129,43 +189,24 @@ export class DebuggerTestHelper {
   ): Promise<BreakpointInfo> {
     // MCP schema enforces 1-based columns. Older tests pass `0` to mean "any column" — translate
     // that to omitting the field, keeping the tests working without weakening server validation.
-    const breakpoint: { line: number; column?: number; condition?: string } = { line: lineNumber, condition };
+    const pending: PendingBreakpoint = { line: lineNumber, condition };
 
     if (columnNumber >= 1) {
-      breakpoint.column = columnNumber;
+      pending.column = columnNumber;
     }
 
-    const result = await this.mcpClient.callTool("setBreakpoints", {
-      source: { path: filePath },
-      breakpoints: [breakpoint],
-    });
+    const list = this.breakpointsBySource.get(filePath) ?? [];
 
-    if (result.isError || !result.content[0]) {
-      throw new Error("Failed to set breakpoint");
+    list.push(pending);
+    this.breakpointsBySource.set(filePath, list);
+
+    const returned = await this.syncBreakpointsForFile(filePath);
+
+    if (returned.length < list.length) {
+      throw new Error("setBreakpoints did not return the newly added breakpoint");
     }
 
-    try {
-      const response = JSON.parse(result.content[0].text);
-
-
-      // Check if response contains an error (old format) or is a failed response (new format)
-      if (response.error || (response.success === false)) {
-        throw new Error(response.message ?? response.error);
-      }
-
-      // Handle new standardized response format
-      const breakpointData = response.success ? response.data : response;
-
-      // Extract the first breakpoint from the breakpoints array since we only set one
-      if (breakpointData.breakpoints && breakpointData.breakpoints.length > 0) {
-        return breakpointData.breakpoints[0];
-      } else {
-        // Fallback to old single breakpoint format
-        return breakpointData;
-      }
-    } catch (error) {
-      throw new Error(`Failed to parse breakpoint response: ${error}`, { cause: error });
-    }
+    return returned[list.length - 1];
   }
 
   async setLogpoint(
@@ -174,42 +215,24 @@ export class DebuggerTestHelper {
     columnNumber: number,
     logMessage: string,
   ): Promise<BreakpointInfo> {
-    const breakpoint: { line: number; column?: number; logMessage: string } = { line: lineNumber, logMessage };
+    const pending: PendingBreakpoint = { line: lineNumber, logMessage };
 
     if (columnNumber >= 1) {
-      breakpoint.column = columnNumber;
+      pending.column = columnNumber;
     }
 
-    const result = await this.mcpClient.callTool("setBreakpoints", {
-      source: { path: filePath },
-      breakpoints: [breakpoint],
-    });
+    const list = this.breakpointsBySource.get(filePath) ?? [];
 
-    if (result.isError || !result.content[0]) {
-      throw new Error("Failed to set logpoint");
+    list.push(pending);
+    this.breakpointsBySource.set(filePath, list);
+
+    const returned = await this.syncBreakpointsForFile(filePath);
+
+    if (returned.length < list.length) {
+      throw new Error("setBreakpoints did not return the newly added logpoint");
     }
 
-    try {
-      const response = JSON.parse(result.content[0].text);
-
-      // Check if response contains an error (old format) or is a failed response (new format)
-      if (response.error || (response.success === false)) {
-        throw new Error(response.message ?? response.error);
-      }
-
-      // Handle new standardized response format
-      const logpointData = response.success ? response.data : response;
-
-      // Extract the first breakpoint from the breakpoints array since we only set one
-      if (logpointData.breakpoints && logpointData.breakpoints.length > 0) {
-        return logpointData.breakpoints[0];
-      } else {
-        // Fallback to old single breakpoint format
-        return logpointData;
-      }
-    } catch (error) {
-      throw new Error(`Failed to parse logpoint response: ${error}`, { cause: error });
-    }
+    return returned[list.length - 1];
   }
 
   async removeBreakpoint(breakpointId: number): Promise<void> {
@@ -224,12 +247,28 @@ export class DebuggerTestHelper {
     try {
       const response = JSON.parse(result.content[0].text);
 
-      // Check if response contains an error
-      if (response.error) {
+      if (response.error || (response.success === false)) {
         throw new Error(response.message ?? response.error);
       }
     } catch (error) {
       throw new Error(`Failed to parse remove breakpoint response: ${error}`, { cause: error });
+    }
+
+    // Drop from the helper's per-source list so subsequent setBreakpoint calls don't
+    // re-send the removed breakpoint.
+    const filePath = this.idToSource.get(breakpointId);
+
+    if (filePath) {
+      this.idToSource.delete(breakpointId);
+
+      const list = this.breakpointsBySource.get(filePath);
+
+      if (list) {
+        const idx = list.findIndex(bp => bp.id === breakpointId);
+
+        if (idx >= 0) list.splice(idx, 1);
+        if (list.length === 0) this.breakpointsBySource.delete(filePath);
+      }
     }
   }
 

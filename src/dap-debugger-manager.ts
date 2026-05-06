@@ -127,7 +127,7 @@ export class DAPDebuggerManager {
 
   async removeBreakpoint(breakpointId: number) {
     return withErrorHandling(async () => {
-      // Find the tracked breakpoint to get source info
+      // Find the tracked breakpoint to get source info (used for the response).
       const trackedBreakpoint = this.dapClient.getTrackedBreakpoints()
         .find(bp => bp.breakpointId === breakpointId);
 
@@ -135,23 +135,20 @@ export class DAPDebuggerManager {
         throw new Error(`Breakpoint ${breakpointId} not found`);
       }
 
-      // Remove by setting empty breakpoints list for the source
-      const breakpointsArgs: DebugProtocol.SetBreakpointsArguments = {
-        source: {
-          name: relative(this.findProjectRoot(), trackedBreakpoint.originalRequest.filePath),
-          path: trackedBreakpoint.originalRequest.filePath,
-        },
-        lines: [],
-        breakpoints: [],
-      };
+      // Remove a single breakpoint by its DAP id; siblings in the same file are not
+      // touched. The previous implementation used setBreakpoints with an empty list,
+      // which caused clearCDPBreakpoints(path) to wipe ALL breakpoints in the file.
+      const result = await this.dapClient.removeBreakpointByDapId(breakpointId);
 
-      await this.dapClient.dapRequest('setBreakpoints', breakpointsArgs);
+      if (!result.removed) {
+        throw new Error(`Breakpoint ${breakpointId} not found in adapter`);
+      }
 
-      // Remove from tracking
       this.dapClient.removeTrackedBreakpoint(breakpointId);
 
       return {
         breakpointId,
+        filePath: result.filePath ?? trackedBreakpoint.originalRequest.filePath,
         message: "Breakpoint removed successfully",
       };
     }, { operation: 'remove breakpoint', breakpointId });

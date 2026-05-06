@@ -39,6 +39,7 @@ export interface NodeJSAttachRequestArguments extends DebugProtocol.AttachReques
 
 interface NodeJSRuntimeBreakpoint {
   id: string;
+  dapId?: number;
   line: number;
   column?: number;
   verified: boolean;
@@ -159,9 +160,11 @@ export class NodeJSDebugAdapter extends DebugSession {
         return;
       }
 
-      // Prepare Node.js arguments for debugging
+      // Prepare Node.js arguments for debugging.
+      // Bind inspector to loopback only -- 0.0.0.0 exposes Runtime.evaluate (RCE)
+      // to anyone on the local network and historically allowed DNS rebinding RCE.
       const nodeArgs = [
-        "--inspect-brk=0.0.0.0:0", // Enable debugging and break on start
+        "--inspect-brk=127.0.0.1:0",
         args.program,
         ...(args.args ?? []),
       ];
@@ -481,6 +484,19 @@ export class NodeJSDebugAdapter extends DebugSession {
     try {
       const clientLines = args.lines ?? [];
       const sourceBreakpoints = args.breakpoints ?? [];
+      // DAP setBreakpoints replaces the file's breakpoint list, but real DAP clients
+      // expect ids to stay stable for breakpoints whose location/condition/logMessage
+      // hasn't changed. Snapshot the previous entries by signature so the loop below
+      // can reuse the existing dapId when it sees the same breakpoint coming back.
+      const previousByKey = new Map<string, number>();
+
+      for (const prev of this.breakpoints.get(path) ?? []) {
+        if (prev.dapId === undefined) continue;
+
+        const key = `${prev.line}|${prev.column ?? 0}|${prev.condition ?? ''}|${prev.logMessage ?? ''}`;
+
+        previousByKey.set(key, prev.dapId);
+      }
 
       // Clear previous breakpoints for this file via CDP
       await this.clearCDPBreakpoints(path);
@@ -655,8 +671,14 @@ export class NodeJSDebugAdapter extends DebugSession {
 
           const breakpointId = cdpResult?.breakpointId ?? `bp_${this.nextBreakpointId++}`;
           const verified = cdpResult !== null;
+          const key = `${line}|${column}|${sourceBreakpoint.condition ?? ''}|${sourceBreakpoint.logMessage ?? ''}`;
+          const dapId = previousByKey.get(key) ?? this.nextBreakpointId++;
+
+          previousByKey.delete(key);
+
           const runtimeBp: NodeJSRuntimeBreakpoint = {
             id: breakpointId,
+            dapId,
             line,
             column,
             verified,
@@ -675,7 +697,7 @@ export class NodeJSDebugAdapter extends DebugSession {
             path,
           };
           // Provide numeric id for DAP response consumers
-          (actualBp as unknown as DebugProtocol.Breakpoint).id = this.nextBreakpointId++;
+          (actualBp as unknown as DebugProtocol.Breakpoint).id = dapId;
 
           actualBreakpoints.push(actualBp);
 
@@ -690,8 +712,14 @@ export class NodeJSDebugAdapter extends DebugSession {
           }
         } catch (error) {
           // Create unverified breakpoint if CDP fails
+          const key = `${line}|${column}|${sourceBreakpoint.condition ?? ''}|${sourceBreakpoint.logMessage ?? ''}`;
+          const dapId = previousByKey.get(key) ?? this.nextBreakpointId++;
+
+          previousByKey.delete(key);
+
           const runtimeBp: NodeJSRuntimeBreakpoint = {
             id: `bp_${this.nextBreakpointId++}`,
+            dapId,
             line,
             column,
             verified: false,
@@ -707,7 +735,7 @@ export class NodeJSDebugAdapter extends DebugSession {
             name: path.split("/").pop(),
             path,
           };
-          (actualBp as unknown as DebugProtocol.Breakpoint).id = this.nextBreakpointId++;
+          (actualBp as unknown as DebugProtocol.Breakpoint).id = dapId;
 
           actualBreakpoints.push(actualBp);
 
@@ -754,6 +782,41 @@ export class NodeJSDebugAdapter extends DebugSession {
     await this.setBreakPointsRequest(response, args);
 
     return response;
+  }
+
+  // Remove a single breakpoint by its DAP id without affecting siblings in the same file.
+  // Sends Debugger.removeBreakpoint for one CDP id and prunes the runtime map entry.
+  async removeBreakpointByDapId(dapId: number): Promise<{ removed: boolean; filePath?: string }> {
+    for (const [filePath, list] of this.breakpoints.entries()) {
+      const index = list.findIndex(bp => bp.dapId === dapId);
+
+      if (index < 0) continue;
+
+      const [bp] = list.splice(index, 1);
+
+      if (this.cdpTransport && bp.verified) {
+        try {
+          await this.cdpTransport.sendCommand("Debugger.removeBreakpoint", {
+            breakpointId: bp.id,
+          });
+        } catch (error) {
+          this.sendEvent(
+            new OutputEvent(
+              `Failed to remove breakpoint ${bp.id}: ${error instanceof Error ? error.message : String(error)}\n`,
+              "console",
+            ),
+          );
+        }
+      }
+
+      if (list.length === 0) {
+        this.breakpoints.delete(filePath);
+      }
+
+      return { removed: true, filePath };
+    }
+
+    return { removed: false };
   }
 
   private async clearCDPBreakpoints(filePath: string): Promise<void> {

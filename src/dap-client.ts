@@ -26,7 +26,11 @@ export class DAPClient extends EventEmitter {
   private debuggerEvents: DebuggerEvent[] = [];
   private readonly trackedBreakpoints: Map<number, TrackedBreakpoint> = new Map();
   private nextRequestId = 1;
-  private readonly pendingRequests = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  private readonly pendingRequests = new Map<number, {
+    resolve: (value: unknown) => void;
+    reject: (error: Error) => void;
+    timeout: NodeJS.Timeout;
+  }>();
 
   private appendLogpointHit(hit: LogpointHit): void {
     this.logpointHits.push(hit);
@@ -201,10 +205,23 @@ export class DAPClient extends EventEmitter {
       }
 
       const requestId = this.nextRequestId++;
+      // Set the timeout up front and store it in the pending-request record so that
+      // resolveRequest/rejectRequest can clear it atomically. Sync DAP methods
+      // (initialize, threads, stackTrace, scopes, loadedSources, exceptionInfo, goto)
+      // settle the promise inside the IIFE before this Promise executor returns; the
+      // previous design overrode `pendingRequests.get(id)!.resolve` after the IIFE,
+      // which threw a silent TypeError on those paths and leaked the timer for 10s.
+      const timeout = setTimeout(() => {
+        if (this.pendingRequests.has(requestId)) {
+          this.pendingRequests.delete(requestId);
+          reject(new Error(`DAP request timeout: ${method}`));
+        }
+      }, 10000);
 
       this.pendingRequests.set(requestId, {
         resolve: resolve as (value: unknown) => void,
         reject: reject as (error: Error) => void,
+        timeout,
       });
 
       // Dispatch to real adapter methods (no mock handlers).
@@ -315,19 +332,6 @@ export class DAPClient extends EventEmitter {
           this.rejectRequest(requestId, error instanceof Error ? error : new Error(String(error)));
         }
       })();
-
-      // Timeout handling
-      const timeout = setTimeout(() => {
-        if (this.pendingRequests.has(requestId)) {
-          this.pendingRequests.delete(requestId);
-          reject(new Error(`DAP request timeout: ${method}`));
-        }
-      }, 10000);
-
-      this.pendingRequests.get(requestId)!.resolve = (value: unknown) => {
-        clearTimeout(timeout);
-        resolve(value as T);
-      };
     });
   }
 
@@ -378,6 +382,7 @@ export class DAPClient extends EventEmitter {
     const pendingRequest = this.pendingRequests.get(requestId);
 
     if (pendingRequest) {
+      clearTimeout(pendingRequest.timeout);
       this.pendingRequests.delete(requestId);
       pendingRequest.resolve(response);
     }
@@ -387,6 +392,7 @@ export class DAPClient extends EventEmitter {
     const pendingRequest = this.pendingRequests.get(requestId);
 
     if (pendingRequest) {
+      clearTimeout(pendingRequest.timeout);
       this.pendingRequests.delete(requestId);
       pendingRequest.reject(error);
     }
@@ -649,6 +655,17 @@ export class DAPClient extends EventEmitter {
 
   getTrackedBreakpoints(): TrackedBreakpoint[] {
     return Array.from(this.trackedBreakpoints.values());
+  }
+
+  // Removes one breakpoint at the adapter level by DAP id without touching siblings.
+  // Manager.removeBreakpoint goes through here instead of using setBreakpoints with an
+  // empty list, which used to wipe every breakpoint in the same source file.
+  async removeBreakpointByDapId(dapId: number): Promise<{ removed: boolean; filePath?: string }> {
+    if (!this.connection.adapter) {
+      throw new Error('Not connected to debug adapter');
+    }
+
+    return this.connection.adapter.removeBreakpointByDapId(dapId);
   }
 
   // Logpoint and event management

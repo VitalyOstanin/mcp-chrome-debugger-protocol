@@ -10,6 +10,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -20,6 +21,7 @@ jobs:
   publish-npm:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       id-token: write
       contents: read
@@ -29,6 +31,8 @@ jobs:
         with:
           node-version: '24'
           registry-url: https://registry.npmjs.org/
+          # Cache deliberately disabled for OIDC trusted publishers compatibility
+          # (see commit 4ae9f2a). Re-evaluate when actions/setup-node updates this.
           package-manager-cache: false
       - run: node --version && npm --version
       - run: npm ci
