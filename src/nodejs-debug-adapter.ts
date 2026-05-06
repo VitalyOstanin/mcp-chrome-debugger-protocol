@@ -1056,6 +1056,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     response: DebugProtocol.DisconnectResponse,
     args: DebugProtocol.DisconnectArguments,
   ): Promise<void> {
+    void args;
     if (this.nodeProcess) {
       this.nodeProcess.kill();
       this.nodeProcess = null;
@@ -1069,8 +1070,14 @@ export class NodeJSDebugAdapter extends DebugSession {
 
     this.currentCallFrames = [];
     this.variableHandles.clear();
+    this.lastException = null;
 
-    super.disconnectRequest(response, args);
+    // Do NOT delegate to super.disconnectRequest here. DebugSession's default
+    // implementation calls this.shutdown(), which in non-server mode invokes
+    // process.exit(0) and would kill the entire MCP server hosting this
+    // in-process adapter. Our DAPClient owns the adapter lifecycle and
+    // re-creates it on the next attach, so all cleanup happens above.
+    this.sendResponse(response);
   }
 
   // ===== Public methods used by DAPClient.dapRequest =====
