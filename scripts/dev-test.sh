@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Script for testing MCP server in dev mode
 
@@ -12,10 +13,8 @@ fi
 
 # Build project
 echo "Building project..."
-npm run build
-
-if [ $? -ne 0 ]; then
-    echo "Build failed!"
+if ! npm run build; then
+    echo "Build failed!" >&2
     exit 1
 fi
 
@@ -23,20 +22,32 @@ echo "Build successful!"
 
 # Build test application
 echo "Building test application..."
-cd tests/fixtures/test-app
-npm install --silent
-npm run build --silent
-cd ../../..
+(
+    cd tests/fixtures/test-app
+    npm install --silent
+    npm run build --silent
+)
 
 echo "Starting HTTP test server with debugger..."
 node --inspect tests/fixtures/test-app/dist/index.js &
 TEST_PID=$!
 echo "Test HTTP server started with PID: $TEST_PID"
 
-echo "Debugger should be available on ws://localhost:9229"
+echo "Debugger should be available on ws://127.0.0.1:9229"
 
-# Wait for initialization
-sleep 2
+# Wait until the inspector accepts requests; bounded loop instead of a fixed sleep.
+INSPECTOR_READY=0
+for _ in $(seq 1 20); do
+    if curl -sf http://127.0.0.1:9229/json/version >/dev/null 2>&1; then
+        INSPECTOR_READY=1
+        break
+    fi
+    sleep 0.5
+done
+
+if [ "$INSPECTOR_READY" -ne 1 ]; then
+    echo "Warning: inspector did not respond on 9229 within 10s" >&2
+fi
 
 echo ""
 echo "HTTP server is running with debugger enabled!"

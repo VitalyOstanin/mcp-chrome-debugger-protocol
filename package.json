@@ -10,6 +10,7 @@
     "mcp-chrome-debugger-protocol": "dist/index.js"
   },
   "scripts": {
+    "prebuild": "rm -rf dist",
     "build": "tsc -p tsconfig.build.json",
     "postbuild": "chmod +x dist/index.js",
     "dev": "tsc -p tsconfig.build.json --watch",
@@ -18,14 +19,12 @@
     "dev:server": "npm run build && node dist/index.js",
     "dev:test": "bash scripts/dev-test.sh",
     "dev:test:ts": "bash scripts/dev-test.sh ts",
-    "mcp:install": "bash scripts/install-claude-code-mcp.sh",
-    "mcp:install:dev": "bash scripts/install-claude-code-dev-mcp.sh",
-    "mcp:uninstall": "bash scripts/uninstall-claude-code-mcp.sh",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:integration:watch": "vitest --config vitest.integration.config.ts",
+    "test:all": "npm test && npm run test:integration",
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
     "lint:fix": "eslint . --fix --cache --cache-location node_modules/.cache/eslint/",
     "prepublishOnly": "npm run build"

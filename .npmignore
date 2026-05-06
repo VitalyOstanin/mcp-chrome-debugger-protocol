@@ -1,3 +1,7 @@
+# package.json `files` is the source of truth for what ends up in the tarball
+# (only dist/**/*.{js,d.ts} + README.md). This .npmignore is a defence-in-depth
+# layer that keeps obvious dev artefacts out even if `files` is loosened.
+
 # Demo files (large size)
 demo-ts-mcp-chrome-debugger-protocol.gif
 demo-ts-mcp-chrome-debugger-protocol.svg
@@ -6,33 +10,46 @@ demo-ts-mcp-chrome-debugger-protocol.svg
 src/
 tests/
 eslint.config.mjs
-jest.config.cjs
-jest.config.integration.cjs
-tsconfig.lint.json
+vitest.config.ts
+vitest.integration.config.ts
+tsconfig.json
+tsconfig.base.json
+tsconfig.build.json
 
 # Documentation (keep only README.md)
+AGENTS.md
 CLAUDE.md
+CHANGELOG.md
+BUGFIX-source-map-path-normalization.md
 DONATIONS.md
+docs/
 donation-qr.png
 
 # Source maps (development only)
 dist/**/*.map
 
 # Development scripts
-scripts/dev-test.sh
-scripts/analyze-protocol.cjs
+scripts/
 
 # IDE and system files
 .vscode/
 .idea/
+.editorconfig
+.nvmrc
 *.log
+*.pid
 *.tmp
 .DS_Store
 Thumbs.db
 
-# Git files
+# Git / GitHub
 .git/
 .gitignore
+.github/
+
+# Coverage reports
+coverage/
+coverage-integration/
 
 # Node modules
 node_modules/
