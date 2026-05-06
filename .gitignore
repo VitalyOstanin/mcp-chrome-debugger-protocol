@@ -128,3 +128,6 @@ local.json
 # Build scripts and generated files
 src/generated/*
 !src/generated/.gitkeep
+
+# Project review reports (project-check skill output)
+docs/reviews/
