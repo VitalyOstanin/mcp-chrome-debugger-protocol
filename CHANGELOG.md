@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.5.1] - 2026-05-07
+
+### Fixed
+
+- **Critical**: `disconnect` no longer kills the MCP server. In 1.5.0 the new direct `adapter.disconnect()` call delegated to `DebugSession.disconnectRequest` from `@vscode/debugadapter`, which calls `this.shutdown()` → `process.exit(0)` in non-server mode. Any client that issued `disconnect` would terminate the server process; reconnects and rapid attach/disconnect cycles failed with `MCP error -32000: Connection closed`. The override now performs all cleanup itself (kill nodeProcess, close cdpTransport, clear call frames / variable handles / lastException) and skips the parent implementation. `sendResponse(response)` is still called so awaiting callers are satisfied. (`src/nodejs-debug-adapter.ts:1055`)
+
+### CI
+
+- `npm-publish.yml`: gate the publish on `npm run test:integration` (between unit tests and the smoke pack-and-install). Without this gate, the 1.5.0 regression above was published despite integration tests being broken on master. Job-level `timeout-minutes` raised from 10 to 25 to accommodate the added ~9 min runtime; step-level `timeout-minutes: 18` mirrors `node.js.yml`.
+
 ## [1.5.0] - 2026-05-07
 
 ### Fixed
