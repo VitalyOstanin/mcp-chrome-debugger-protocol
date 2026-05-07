@@ -84,8 +84,27 @@ jobs:
       # hangs (real Node.js inspector debuggee + sockets), fail the step at 18
       # so the job can still finish below its 25-minute job timeout instead of
       # eating the whole budget on a single stuck test.
+      #
+      # `--coverage` enables v8 coverage on the integration suite, written to
+      # ./coverage-integration/lcov.info per `vitest.integration.config.ts`.
+      # It's left enabled for both Node versions (extra runtime cost is small)
+      # but only the 22.x report is uploaded to Codecov below to avoid
+      # double-counting.
       timeout-minutes: 18
-      run: npm run test:integration
+      run: npm run test:integration -- --coverage
+
+    - name: Upload integration coverage to Codecov
+      # Same single-matrix-entry policy as the unit upload above, but tagged
+      # with `flags: integration` so Codecov can show a unit-vs-integration
+      # breakdown alongside the merged total.
+      if: matrix.node-version == '22.x'
+      # codecov/codecov-action pinned to v6.0.0
+      uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2
+      with:
+        use_oidc: true
+        files: ./coverage-integration/lcov.info
+        flags: integration
+        fail_ci_if_error: false
 
   audit:
     runs-on: ubuntu-latest
