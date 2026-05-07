@@ -74,6 +74,7 @@
     "@typescript-eslint/eslint-plugin": "^8.59.2",
     "@typescript-eslint/parser": "^8.59.2",
     "@vitest/coverage-v8": "^4.1.5",
+    "c8": "^11.0.0",
     "eslint": "^10.3.0",
     "express": "^5.2.1",
     "get-port": "^7.2.0",

@@ -13,12 +13,13 @@ export default defineConfig({
     fileParallelism: false,
     maxWorkers: 1,
     isolate: true,
-    coverage: {
-      provider: 'v8',
-      reporter: ['text', 'lcov', 'html'],
-      reportsDirectory: 'coverage-integration',
-      include: ['src/**/*.ts'],
-      exclude: ['src/**/*.d.ts', '**/*.test.ts', '**/*.spec.ts'],
-    },
+    // Coverage for the integration suite is collected externally via
+    // `NODE_V8_COVERAGE=...` + `c8 report`, not via vitest's own coverage
+    // hook. The interesting code (DAP client, MCP server, debug adapter,
+    // debugger manager, CDP transport) runs in spawned child processes
+    // (`dist/index.js` and the test-app debuggee), and vitest's coverage
+    // only instruments its own worker, which would silently miss them.
+    // See `.github/workflows/node.js.yml` for how the JSON dumps are
+    // merged and source-map-remapped back to `src/*.ts`.
   },
 });
