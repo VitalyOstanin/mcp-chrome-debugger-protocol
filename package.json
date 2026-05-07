@@ -28,7 +28,7 @@
     "bench": "NODE_OPTIONS='--max-old-space-size=1024' vitest bench --run",
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
     "lint:fix": "eslint . --fix --cache --cache-location node_modules/.cache/eslint/",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm audit --omit=dev --audit-level=high && npm run build"
   },
   "author": "Vitaly Ostanin <vitaly.ostanin@gmail.com>",
   "license": "MIT",
@@ -54,7 +54,8 @@
   "files": [
     "dist/**/*.js",
     "dist/**/*.d.ts",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "dependencies": {
     "@jridgewell/trace-mapping": "^0.3.31",

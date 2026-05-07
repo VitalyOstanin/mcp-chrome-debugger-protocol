@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- `LICENSE` (MIT) file in repository root and added to the `files` allow-list so it ships in the published tarball.
+
+### Changed
+- Strengthened `prepublishOnly` to run lint, typecheck, tests, audit, and build (was: `npm run build` only). Brings the local guard in line with the gates already enforced in `.github/workflows/npm-publish.yml`.
+
 ## [1.5.1] - 2026-05-07
 
 ### Fixed
