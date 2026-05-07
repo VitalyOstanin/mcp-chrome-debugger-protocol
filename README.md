@@ -2,6 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@vitalyostanin/mcp-chrome-debugger-protocol.svg)](https://www.npmjs.com/package/@vitalyostanin/mcp-chrome-debugger-protocol)
 [![Node.js CI](https://github.com/VitalyOstanin/mcp-chrome-debugger-protocol/actions/workflows/node.js.yml/badge.svg?branch=master)](https://github.com/VitalyOstanin/mcp-chrome-debugger-protocol/actions/workflows/node.js.yml)
+[![codecov](https://codecov.io/gh/VitalyOstanin/mcp-chrome-debugger-protocol/graph/badge.svg?branch=master)](https://codecov.io/gh/VitalyOstanin/mcp-chrome-debugger-protocol)
 [![node](https://img.shields.io/node/v/@vitalyostanin/mcp-chrome-debugger-protocol.svg)](https://nodejs.org)
 
 MCP server that lets AI coding tools control and observe a running Node.js process through the chrome devtools protocol (CDP), via a lightweight Debug Adapter Protocol (DAP) bridge.
