@@ -9,6 +9,28 @@ MCP server that lets AI coding tools control and observe a running Node.js proce
 
 Tested with Claude Code CLI.
 
+## Table of Contents
+
+- [Features](#features)
+- [High-Level Diagram](#high-level-diagram)
+- [How It Works (Functional Description)](#how-it-works-functional-description)
+- [Debugger Interaction (Textual Scheme)](#debugger-interaction-textual-scheme)
+- [Demo](#demo)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Removal](#removal)
+- [Security model](#security-model)
+- [Quick Start](#quick-start)
+- [Development](#development)
+- [Verbose diagnostics (DAP_VERBOSE)](#verbose-diagnostics-dap_verbose)
+- [Available Tools](#available-tools)
+- [Logpoints](#logpoints)
+- [TypeScript Breakpoints and Source Maps](#typescript-breakpoints-and-source-maps)
+- [Troubleshooting](#troubleshooting)
+- [Architecture](#architecture)
+- [Project Creation](#project-creation)
+- [Support](#support)
+
 ## Features
 
 - **Attach/Control**: Attach to a Node.js process by port, WebSocket URL, or PID; pause, continue, and step through code.
@@ -59,7 +81,6 @@ flowchart LR
 
 **Available formats:**
 - [Animated GIF](demo-ts-mcp-chrome-debugger-protocol.gif)
-- [Animated SVG](demo-ts-mcp-chrome-debugger-protocol.svg)  
 - [Original asciinema recording](https://asciinema.org/a/CgygsuhpDtOIHV7QPFr6VWU7D)
 
 ## Requirements
@@ -144,6 +165,18 @@ End-to-end loop in 30 seconds: run `npm run dev:test` in one terminal (it starts
 Formatting: this project relies on ESLint plus `.editorconfig`. There is no separate `prettier` configuration, and there is no `npm run format` script -- run `npm run lint:fix` to apply style fixes. If your editor inserts conflicting formatting, configure it to defer to ESLint.
 
 See [AGENTS.md](AGENTS.md) for detailed contributor rules and project conventions.
+
+## Verbose diagnostics (DAP_VERBOSE)
+
+Set `DAP_VERBOSE=1` (or `DAP_VERBOSE=true`) in the environment to enable verbose adapter diagnostics. When enabled, the server writes additional lines to stderr (and DAP `OutputEvent`s on the wire) for source-map resolution, breakpoint placement, CDP fallbacks, and reconnect attempts.
+
+**Do not enable in production / shared environments.** Verbose output may include:
+
+- Resolved source paths and `*.js.map` filenames from your project.
+- User-supplied breakpoint conditions and logpoint `logMessage` templates verbatim. The values interpolated for `{expr}` placeholders are evaluated in the debuggee and therefore not echoed by the adapter, but the template text itself is (e.g. `Logpoint set at /abs/path/src/index.ts:42 - Message: "token={process.env.API_KEY}"`).
+- Underlying CDP/DAP error messages, which may quote user input.
+
+Reserve `DAP_VERBOSE=1` for local debugging of the adapter itself. The default (unset) mode emits only fatal errors.
 
 ## Available Tools
 

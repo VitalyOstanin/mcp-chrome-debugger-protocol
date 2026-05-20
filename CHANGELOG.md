@@ -1,5 +1,41 @@
 # Changelog
 
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- Documented `DAP_VERBOSE` environment flag and called out that verbose output may surface user-authored breakpoint conditions / logpoint templates ([README.md](README.md)).
+- Table of contents in README.
+- Threat model in [docs/SECURITY.md](docs/SECURITY.md) (link from README "Security model").
+- Adapter-private DAP error codes registry in [src/constants.ts](src/constants.ts) (`DAP_ERROR_CODES`).
+- Global handlers for `uncaughtException` (fatal, exit 1) and `unhandledRejection` (logged, non-fatal) in [src/index.ts](src/index.ts).
+- `DebugProtocol.Breakpoint.message` is now populated with a human-readable reason when a breakpoint fails to bind (CDP transport down, placement errors).
+- Source-map resolution accepts `.js/.jsx/.mjs/.cjs` originals when the path looks like authored source or has an adjacent `*.map`.
+- Strict suffix-match in `SourceMapResolver.matchSource` when `originalSourcePath` is provided, preventing wrong sibling pick in monorepos with duplicate basenames.
+
+### Changed
+- `setBreakpoints` / `clearCDPBreakpoints` issue CDP commands in parallel via `Promise.all`. DAP id allocation stays serial for determinism.
+- `truncateResult` measures payload size against the wire format (no indent), eliminating false-positive "Response too large" responses on payloads that would fit; double `JSON.stringify` on the happy path is gone.
+- `CDPTransport.connect / sendCommand / enableDomains` no longer `emit('error', ...) + throw`. Only `throw` -- callers see the same failure once.
+- `withErrorHandling` redacts sensitive context fields (`expression`, `value`, `condition`, `logMessage`) to `[redacted: N chars]` before echoing them into `ErrorResponse.details`.
+- `enableDebuggerPid` / `attachToProcess` now build proper `ErrorResponse` envelopes (human message, structured `details`, explicit `code`) instead of JSON-stringifying everything into `message`.
+- DRY refactor: introduced `errorMessage(cause)` helper (centralises the `error instanceof Error` idiom across 25+ sites), `runCdpExecutionCommand` (collapses 5 near-identical DAP request handlers in `NodeJSDebugAdapter`), and `TRUNCATION_OPTIONS_SCHEMA` shared between `evaluate` / `stackTrace` / `variables` tool registrations.
+- Reused `isVerbose()` from `logger.ts` instead of re-reading `process.env.DAP_VERBOSE` in `NodeJSDebugAdapter`.
+
+### Removed
+- `goto` MCP tool. The underlying DAP handler always threw because V8 has no primitive jump operation; the tool only polluted `tools/list`. The DAP handler stays so external DAP clients still get a proper "not supported" response.
+- Broken README link to `demo-ts-mcp-chrome-debugger-protocol.svg` (file does not exist; the GIF link remains).
+
+### Security
+- Bumped `ws` to `^8.20.1` (GHSA-58qx-3vcg-4xpx).
+
+### CI
+- Annotated git tags + GitHub Releases via `gh release create` from the publish workflow; restored missing `v1.2.0` tag.
+- Codecov OIDC upload (no token), and split integration-test coverage into a separate Codecov flag.
+
 ## [1.6.1] - 2026-05-07
 
 ### Added
