@@ -8,6 +8,7 @@ import { DEFAULTS, INSPECTOR_PORT_RANGE } from './constants.js';
 import { logVerbose } from './logger.js';
 import { kill } from 'node:process';
 import { spawn } from 'node:child_process';
+import { setTimeout as scheduleTimeout } from 'node:timers';
 import { setTimeout as sleep } from 'node:timers/promises';
 import http from 'node:http';
 
@@ -332,7 +333,12 @@ export class DAPClient extends EventEmitter {
       // previous design overrode `pendingRequests.get(id)!.resolve` after the IIFE,
       // which threw a silent TypeError on those paths and leaked the timer for the
       // request lifetime.
-      const timeout = setTimeout(() => {
+      // Use the callback-based setTimeout from node:timers explicitly
+      // (renamed scheduleTimeout) so it is visually distinguishable from the
+      // promise-based `sleep` imported above. We need the timer handle here
+      // for clearTimeout in resolveRequest/rejectRequest, so the promise API
+      // does not fit.
+      const timeout = scheduleTimeout(() => {
         if (this.pendingRequests.has(requestId)) {
           this.pendingRequests.delete(requestId);
           reject(new Error(`DAP request timeout: ${method}`));
@@ -497,7 +503,7 @@ export class DAPClient extends EventEmitter {
         // Fail-closed: if neither 'spawn' nor 'error' arrived within the window,
         // treat the command as unavailable. The previous default of true caused
         // strace probes to run on systems without strace and waste STRACE_TIMEOUT_MS.
-        setTimeout(() => { finish(false); }, DEFAULTS.COMMAND_AVAILABILITY_TIMEOUT_MS).unref();
+        scheduleTimeout(() => { finish(false); }, DEFAULTS.COMMAND_AVAILABILITY_TIMEOUT_MS).unref();
       } catch {
         resolve(false);
       }
@@ -575,7 +581,7 @@ export class DAPClient extends EventEmitter {
       strace.stdout?.on("data", onData);
       strace.once("exit", onExit);
 
-      setTimeout(() => {
+      scheduleTimeout(() => {
         cleanup();
         resolve(detectedPort);
       }, DEFAULTS.STRACE_TIMEOUT_MS).unref();
