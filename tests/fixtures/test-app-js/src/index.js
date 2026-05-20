@@ -3,28 +3,6 @@
 import express from "express";
 import getPort from "get-port";
 
-// Parse an optional port from a string env var.
-// Accepts only clean non-negative integers in the TCP range [0, 65535].
-// Returns undefined for unset / blank / malformed / out-of-range input;
-// callers fall back to get-port's pool.
-function parseOptionalPort(raw) {
-  if (raw === undefined || raw === '') return undefined;
-  if (!/^\d+$/.test(raw)) {
-    console.warn(`MCP_TEST_APP_PORT='${raw}' is not a non-negative integer; falling back to get-port`);
-
-    return undefined;
-  }
-  const n = Number.parseInt(raw, 10);
-
-  if (n < 0 || n > 65535) {
-    console.warn(`MCP_TEST_APP_PORT=${n} is outside TCP port range 0..65535; falling back to get-port`);
-
-    return undefined;
-  }
-
-  return n;
-}
-
 class DataProcessor {
   constructor() {
     this.data = [];
@@ -206,3 +184,26 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 }
 
 export { DataProcessor, fibonacci, testBreakpointFunction, main };
+
+// Defined at the end of the file (JS function declarations hoist). Keeping it
+// here preserves the line numbers of the Express handlers above for any
+// integration test that pins breakpoints against this fixture. Accepts only
+// clean non-negative integers in [0, 65535]; returns undefined otherwise so
+// callers fall back to get-port's pool.
+function parseOptionalPort(raw) {
+  if (raw === undefined || raw === '') return undefined;
+  if (!/^\d+$/.test(raw)) {
+    console.warn(`MCP_TEST_APP_PORT='${raw}' is not a non-negative integer; falling back to get-port`);
+
+    return undefined;
+  }
+  const n = Number.parseInt(raw, 10);
+
+  if (n < 0 || n > 65535) {
+    console.warn(`MCP_TEST_APP_PORT=${n} is outside TCP port range 0..65535; falling back to get-port`);
+
+    return undefined;
+  }
+
+  return n;
+}

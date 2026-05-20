@@ -3,28 +3,6 @@
 import express from "express";
 import type { AddressInfo } from "net";
 
-// Parse an optional port from a string env var.
-// Accepts only clean non-negative integers in the TCP range [0, 65535].
-// Returns undefined for unset / blank / malformed / out-of-range input;
-// callers fall back to port=0 (OS-assigned).
-function parseOptionalPort(raw: string | undefined): number | undefined {
-  if (raw === undefined || raw === '') return undefined;
-  if (!/^\d+$/.test(raw)) {
-    console.warn(`MCP_TEST_APP_PORT='${raw}' is not a non-negative integer; using OS-assigned port`);
-
-    return undefined;
-  }
-  const n = Number.parseInt(raw, 10);
-
-  if (n < 0 || n > 65535) {
-    console.warn(`MCP_TEST_APP_PORT=${n} is outside TCP port range 0..65535; using OS-assigned port`);
-
-    return undefined;
-  }
-
-  return n;
-}
-
 interface TestData {
   id: number;
   name: string;
@@ -168,12 +146,10 @@ async function main(): Promise<void> {
     });
   });
 
-  // MCP_TEST_APP_PORT is optional. When unset (or invalid), we pass port=0 to
-  // listen() and the OS picks a free port; the chosen port is then parsed out
-  // of the "listening on port N" log line by tests/utils/test-app-manager.ts.
-  // parseInt accepts "8080garbage" -> 8080, so we additionally require the
-  // string to be a clean non-negative integer and within the valid TCP range.
-  const requestedPort = parseOptionalPort(process.env.MCP_TEST_APP_PORT) ?? 0;
+  // Get port from environment variable or let the OS assign a free one (port 0).
+  const { MCP_TEST_APP_PORT } = process.env;
+  const envPort = parseOptionalPort(MCP_TEST_APP_PORT);
+  const requestedPort = envPort ?? 0;
 
   const server = app.listen(requestedPort, () => {
     const address = server.address() as AddressInfo | null;
@@ -231,3 +207,26 @@ if (require.main === module) {
 }
 
 export { DataProcessor, fibonacci, testBreakpointFunction, main };
+
+// Defined at the end of the file (TS function hoisting still makes it visible
+// in main()). Keeping it here preserves the line numbers of the Express
+// handlers above, which integration tests pin breakpoints against. Accepts
+// only clean non-negative integers in the TCP range [0, 65535]; returns
+// undefined otherwise so callers fall back to port=0 (OS-assigned).
+function parseOptionalPort(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  if (!/^\d+$/.test(raw)) {
+    console.warn(`MCP_TEST_APP_PORT='${raw}' is not a non-negative integer; using OS-assigned port`);
+
+    return undefined;
+  }
+  const n = Number.parseInt(raw, 10);
+
+  if (n < 0 || n > 65535) {
+    console.warn(`MCP_TEST_APP_PORT=${n} is outside TCP port range 0..65535; using OS-assigned port`);
+
+    return undefined;
+  }
+
+  return n;
+}

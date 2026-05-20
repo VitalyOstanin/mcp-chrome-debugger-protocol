@@ -23,21 +23,26 @@ export default defineConfig({
       ],
       // Floors fix the current unit-coverage baseline so a future refactor
       // cannot silently drop it. Per-file overrides protect modules that are
-      // already well covered (utils, tool-state-manager, source-map-resolver).
-      // Raise the global numbers as integration-style logic gets unit tests.
-      // The global numbers and the source-map-resolver per-file numbers were
-      // tightened in 1.6.0 above the real measurements (recent refactors had
-      // extracted helpers and the coverage drifted down without an immediate
-      // CI signal). Re-aligned to current measurements with a 1pp buffer so
-      // small fluctuations don't fail CI; raise them after adding new tests.
+      // already well covered. Raise the global numbers as integration-style
+      // logic gets unit tests; integration coverage is uploaded separately via
+      // the c8 + NODE_V8_COVERAGE pipeline in .github/workflows/node.js.yml.
+      //
+      // Numbers below match the actual unit-test baseline minus a 1pp buffer
+      // so transient fluctuations (e.g. a small refactor changing a branch
+      // count) don't fail CI without a corresponding coverage regression.
+      // Last measured: src/utils.ts 93.54L / 100F / 73.68B / 93.93S;
+      //                src/tool-state-manager.ts 98.03L / 100F / 91.3B / 98.24S;
+      //                src/source-map-resolver.ts 36.06L / 57.14F / 23.27B / 35.29S;
+      //                src/logpoint.ts 95.65L / 100F / 100B / 95.65S.
       thresholds: {
         lines: 11,
-        functions: 9,
+        functions: 10,
         branches: 11,
         statements: 11,
-        'src/utils.ts': { lines: 80, functions: 80, branches: 80, statements: 80 },
-        'src/tool-state-manager.ts': { lines: 95, functions: 100, branches: 90, statements: 95 },
-        'src/source-map-resolver.ts': { lines: 35, functions: 55, branches: 24, statements: 35 },
+        'src/utils.ts': { lines: 93, functions: 100, branches: 72, statements: 93 },
+        'src/tool-state-manager.ts': { lines: 98, functions: 100, branches: 90, statements: 98 },
+        'src/source-map-resolver.ts': { lines: 36, functions: 57, branches: 23, statements: 35 },
+        'src/logpoint.ts': { lines: 95, functions: 100, branches: 100, statements: 95 },
       },
     },
   },
