@@ -54,3 +54,20 @@ export const INSPECTOR_PORT_RANGE = {
   start: 9229,
   end: 9250,
 } as const;
+
+// DAP-protocol numeric error codes used by NodeJSDebugAdapter.sendErrorResponse.
+// DAP itself does not define a registry of codes; the convention is "1000+ is
+// adapter-private". Keep them here so the inline `1001..1009` magic numbers
+// don't get reused inconsistently and so the matching DAP doc strings can be
+// kept next to the value.
+export const DAP_ERROR_CODES = {
+  LAUNCH_PROGRAM_REQUIRED: 1001,
+  LAUNCH_FAILED: 1002,
+  ATTACH_FAILED: 1003,
+  SET_BREAKPOINTS_FAILED: 1004,
+  CONTINUE_FAILED: 1005,
+  PAUSE_FAILED: 1006,
+  STEP_IN_FAILED: 1007,
+  STEP_OUT_FAILED: 1008,
+  NEXT_FAILED: 1009,
+} as const;

@@ -24,6 +24,7 @@ import {
 } from './logpoint.js';
 import {
   BREAKPOINT_SEARCH_WINDOWS,
+  DAP_ERROR_CODES,
   DEFAULTS,
   END_COLUMN_LARGE,
 } from './constants.js';
@@ -249,7 +250,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     try {
       // Validate required parameters
       if (!args.program) {
-        this.sendErrorResponse(response, 1001, "Program path is required");
+        this.sendErrorResponse(response, DAP_ERROR_CODES.LAUNCH_PROGRAM_REQUIRED, "Program path is required");
 
         return;
       }
@@ -294,7 +295,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     } catch (error) {
       this.sendErrorResponse(
         response,
-        1002,
+        DAP_ERROR_CODES.LAUNCH_FAILED,
         `Launch failed: ${errorMessage(error)}`,
       );
     }
@@ -310,7 +311,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     } catch (error) {
       this.sendErrorResponse(
         response,
-        1003,
+        DAP_ERROR_CODES.ATTACH_FAILED,
         `Attach failed: ${errorMessage(error)}`,
       );
     }
@@ -866,7 +867,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     const { path } = args.source;
 
     if (!path) {
-      this.sendErrorResponse(response, 1004, "Source path is required");
+      this.sendErrorResponse(response, DAP_ERROR_CODES.SET_BREAKPOINTS_FAILED, "Source path is required");
 
       return;
     }
@@ -943,7 +944,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     } catch (error) {
       this.sendErrorResponse(
         response,
-        1004,
+        DAP_ERROR_CODES.SET_BREAKPOINTS_FAILED,
         `Set breakpoints failed: ${errorMessage(error)}`,
       );
     }
@@ -1055,7 +1056,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _args: DebugProtocol.ContinueArguments,
   ): Promise<void> {
-    await this.runCdpExecutionCommand("Debugger.resume", response, 1005, "Continue", () => {
+    await this.runCdpExecutionCommand("Debugger.resume", response, DAP_ERROR_CODES.CONTINUE_FAILED, "Continue", () => {
       response.body = { allThreadsContinued: true };
     });
   }
@@ -1065,7 +1066,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _args: DebugProtocol.PauseArguments,
   ): Promise<void> {
-    await this.runCdpExecutionCommand("Debugger.pause", response, 1006, "Pause");
+    await this.runCdpExecutionCommand("Debugger.pause", response, DAP_ERROR_CODES.PAUSE_FAILED, "Pause");
   }
 
   protected override async stepInRequest(
@@ -1073,7 +1074,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _args: DebugProtocol.StepInArguments,
   ): Promise<void> {
-    await this.runCdpExecutionCommand("Debugger.stepInto", response, 1007, "Step into");
+    await this.runCdpExecutionCommand("Debugger.stepInto", response, DAP_ERROR_CODES.STEP_IN_FAILED, "Step into");
   }
 
   protected override async stepOutRequest(
@@ -1081,7 +1082,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _args: DebugProtocol.StepOutArguments,
   ): Promise<void> {
-    await this.runCdpExecutionCommand("Debugger.stepOut", response, 1008, "Step out");
+    await this.runCdpExecutionCommand("Debugger.stepOut", response, DAP_ERROR_CODES.STEP_OUT_FAILED, "Step out");
   }
 
   protected override async nextRequest(
@@ -1089,7 +1090,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _args: DebugProtocol.NextArguments,
   ): Promise<void> {
-    await this.runCdpExecutionCommand("Debugger.stepOver", response, 1009, "Step over");
+    await this.runCdpExecutionCommand("Debugger.stepOver", response, DAP_ERROR_CODES.NEXT_FAILED, "Step over");
   }
 
   protected override configurationDoneRequest(
