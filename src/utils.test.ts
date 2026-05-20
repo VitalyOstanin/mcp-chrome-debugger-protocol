@@ -6,6 +6,7 @@ import {
   createErrorResponse,
   createSuccessResponse,
   findProjectRoot,
+  mapWithConcurrency,
   sleep,
   withErrorHandling,
 } from './utils.js';
@@ -152,5 +153,96 @@ describe('findProjectRoot', () => {
     } finally {
       await rm(base, { recursive: true, force: true });
     }
+  });
+});
+
+describe('mapWithConcurrency', () => {
+  it('preserves input order regardless of completion order', async () => {
+    // Larger items resolve sooner, so completion order is reversed relative to
+    // input order. Result array must still match the input order.
+    const input = [1, 2, 3, 4, 5];
+    const results = await mapWithConcurrency(input, 3, async (n) => {
+      await sleep(20 - n * 3);
+
+      return n * 10;
+    });
+
+    expect(results).toEqual([10, 20, 30, 40, 50]);
+  });
+
+  it('returns empty array for empty input', async () => {
+    let called = 0;
+    const results = await mapWithConcurrency<number, number>([], 4, async (n) => {
+      called++;
+
+      return n;
+    });
+
+    expect(results).toEqual([]);
+    expect(called).toBe(0);
+  });
+
+  it('caps in-flight invocations at limit', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const input = Array.from({ length: 10 }, (_, i) => i);
+    const results = await mapWithConcurrency(input, 3, async (n) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await sleep(5);
+      inFlight--;
+
+      return n;
+    });
+
+    expect(results).toEqual(input);
+    expect(peak).toBeLessThanOrEqual(3);
+    expect(peak).toBeGreaterThan(1); // some parallelism actually happened
+  });
+
+  it('does not spawn more workers than there are items', async () => {
+    // limit=8, 2 items -> only 2 worker iterations should run.
+    let starts = 0;
+    const results = await mapWithConcurrency([1, 2], 8, async (n) => {
+      starts++;
+      await sleep(2);
+
+      return n * 2;
+    });
+
+    expect(results).toEqual([2, 4]);
+    expect(starts).toBe(2);
+  });
+
+  it('propagates rejections from the worker fn', async () => {
+    await expect(
+      mapWithConcurrency([1, 2, 3], 2, async (n) => {
+        if (n === 2) throw new Error('boom');
+
+        return n;
+      }),
+    ).rejects.toThrow('boom');
+  });
+
+  it('throws when limit is not a positive integer', async () => {
+    await expect(mapWithConcurrency([1], 0, async (n) => n)).rejects.toThrow(/limit must be > 0/);
+    await expect(mapWithConcurrency([1], -1, async (n) => n)).rejects.toThrow(/limit must be > 0/);
+  });
+
+  it('passes the original index to the worker fn', async () => {
+    const seen: Array<{ item: string; index: number }> = [];
+    const results = await mapWithConcurrency(['a', 'b', 'c'], 2, async (item, index) => {
+      seen.push({ item, index });
+
+      return `${item}:${index}`;
+    });
+
+    expect(results).toEqual(['a:0', 'b:1', 'c:2']);
+    // Index pairing must match the input position, regardless of execution order.
+    expect(seen.sort((x, y) => x.index - y.index)).toEqual([
+      { item: 'a', index: 0 },
+      { item: 'b', index: 1 },
+      { item: 'c', index: 2 },
+    ]);
   });
 });

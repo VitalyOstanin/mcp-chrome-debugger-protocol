@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-05-21
+
+### Added
+- Unit tests for `mapWithConcurrency` in [src/utils.test.ts](src/utils.test.ts) -- covers input-order preservation, the in-flight concurrency cap, empty input, worker count vs item count, error propagation, the `limit <= 0` guard, and the index argument contract. Lifts `src/utils.ts` per-file coverage from 73.17% lines / 75% functions back over the 93% / 100% thresholds enforced by [vitest.config.ts](vitest.config.ts).
+
+### Changed
+- `npm-publish.yml` `build` job now runs `npm run test:coverage` instead of `npm test`, so the release path enforces the same coverage thresholds as `node.js.yml`. Previously the two workflows were independent on push events: a coverage regression failed `Node.js CI` on master but `Node.js Package` on the matching tag still published.
+
 ## [1.8.0] - 2026-05-21
 
 ### Added

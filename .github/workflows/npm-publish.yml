@@ -40,7 +40,11 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
-      - run: npm test
+      # Coverage gate mirrors node.js.yml: enforce per-file thresholds in the
+      # release path so a coverage regression cannot slip into npm publish via
+      # tag push (Node.js CI on master and Node.js Package on tag are otherwise
+      # independent workflows).
+      - run: npm run test:coverage
 
       - name: Run integration tests
         # Gate the publish on the same integration suite that node.js.yml runs
