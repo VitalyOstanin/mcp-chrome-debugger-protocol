@@ -887,23 +887,42 @@ export class NodeJSDebugAdapter extends DebugSession {
       const runtimeBreakpoints: NodeJSRuntimeBreakpoint[] = [];
       const total = Math.max(clientLines.length, sourceBreakpoints.length);
 
-      for (let i = 0; i < total; i++) {
-        const fallbackLine = clientLines[i] ?? 1;
-        const sourceBreakpoint: DebugProtocol.SourceBreakpoint = sourceBreakpoints[i] ?? { line: fallbackLine };
-        const line = clientLines[i] ?? sourceBreakpoint.line;
-        // Use 1-based default column to satisfy source map resolution (resolver rejects 0)
-        const column = sourceBreakpoint.column ?? 1;
-        let placement: BreakpointPlacement;
+      interface PlacedBreakpointSlot {
+        line: number;
+        column: number;
+        sourceBreakpoint: DebugProtocol.SourceBreakpoint;
+        placement: BreakpointPlacement;
+      }
 
-        try {
-          placement = await this.placeSingleBreakpoint(path, line, column, sourceBreakpoint);
-        } catch (error) {
-          const reason = errorMessage(error);
+      // Resolve every requested breakpoint in parallel: each placement is an
+      // independent CDP roundtrip and a getPossibleBreakpoints lookup, so a
+      // file with N breakpoints used to pay N sequential network hops. The
+      // *id allocation* loop below stays sequential so dapId / synthetic CDP
+      // id assignment remains deterministic across reruns.
+      const placedSlots: PlacedBreakpointSlot[] = await Promise.all(
+        Array.from({ length: total }, async (_, i): Promise<PlacedBreakpointSlot> => {
+          const fallbackLine = clientLines[i] ?? 1;
+          const sourceBreakpoint: DebugProtocol.SourceBreakpoint = sourceBreakpoints[i] ?? { line: fallbackLine };
+          const line = clientLines[i] ?? sourceBreakpoint.line;
+          // Use 1-based default column to satisfy source map resolution (resolver rejects 0)
+          const column = sourceBreakpoint.column ?? 1;
 
-          this.diagnostic(`Failed to set breakpoint at ${path}:${line}: ${reason}\n`);
-          placement = { cdpResult: null, reason };
-        }
+          try {
+            const placement = await this.placeSingleBreakpoint(path, line, column, sourceBreakpoint);
 
+            return { line, column, sourceBreakpoint, placement };
+          } catch (error) {
+            const reason = errorMessage(error);
+
+            this.diagnostic(`Failed to set breakpoint at ${path}:${line}: ${reason}\n`);
+
+            return { line, column, sourceBreakpoint, placement: { cdpResult: null, reason } };
+          }
+        }),
+      );
+
+      for (const slot of placedSlots) {
+        const { line, column, sourceBreakpoint, placement } = slot;
         const { runtimeBp, actualBp } = this.buildBreakpointEntry(path, line, column, sourceBreakpoint, placement, previousByKey);
 
         runtimeBreakpoints.push(runtimeBp);
@@ -982,20 +1001,20 @@ export class NodeJSDebugAdapter extends DebugSession {
 
   private async clearCDPBreakpoints(filePath: string): Promise<void> {
     const existingBreakpoints = this.breakpoints.get(filePath) ?? [];
+    const transport = this.cdpTransport;
 
-    for (const bp of existingBreakpoints) {
+    // chrome-remote-interface dispatches by request id, so several
+    // removeBreakpoint calls can race safely; this collapses N sequential
+    // round-trips into one when a file has many bound breakpoints.
+    await Promise.all(existingBreakpoints.map(async (bp) => {
+      if (!transport || !bp.verified) return;
+
       try {
-        if (this.cdpTransport && bp.verified) {
-          await this.cdpTransport.sendCommand("Debugger.removeBreakpoint", {
-            breakpointId: bp.id,
-          });
-        }
+        await transport.sendCommand("Debugger.removeBreakpoint", { breakpointId: bp.id });
       } catch (error) {
-        this.diagnostic(
-          `Failed to remove breakpoint ${bp.id}: ${errorMessage(error)}\n`,
-        );
+        this.diagnostic(`Failed to remove breakpoint ${bp.id}: ${errorMessage(error)}\n`);
       }
-    }
+    }));
 
     this.breakpoints.delete(filePath);
   }
