@@ -3,7 +3,8 @@
   "version": "1.6.1",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "npm": ">=10"
   },
   "main": "dist/index.js",
   "bin": {
@@ -18,7 +19,6 @@
     "start": "node dist/index.js",
     "dev:server": "npm run build && node dist/index.js",
     "dev:test": "bash scripts/dev-test.sh",
-    "dev:test:ts": "bash scripts/dev-test.sh ts",
     "test": "NODE_OPTIONS='--max-old-space-size=1024' vitest run",
     "test:watch": "NODE_OPTIONS='--max-old-space-size=1024' vitest",
     "test:coverage": "NODE_OPTIONS='--max-old-space-size=1024' vitest run --coverage",

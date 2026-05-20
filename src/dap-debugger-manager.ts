@@ -6,6 +6,16 @@ import type { DebugProtocol } from '@vscode/debugprotocol';
 import { resolve, relative } from "node:path";
 import { SourceMapResolver } from "./source-map-resolver.js";
 
+/**
+ * High-level DAP/CDP orchestration layer used by the MCP tool handlers.
+ *
+ * Wraps {@link DAPClient} for transport-level work and {@link SourceMapResolver}
+ * for TS<->JS coordinate mapping, then exposes the domain operations the MCP
+ * tools delegate to (set/clear breakpoints, stack/scope/variable inspection,
+ * evaluate, stepping, etc.). Output payloads are normalised via the private
+ * `truncateResult` so a single oversized response cannot blow the MCP wire
+ * budget.
+ */
 export class DAPDebuggerManager {
   private readonly sourceMapResolver = new SourceMapResolver();
 

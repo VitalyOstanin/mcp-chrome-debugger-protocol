@@ -67,6 +67,20 @@ export interface DAPConnection {
   isConnected: boolean;
 }
 
+/**
+ * Bridge between the MCP tool surface and a single CDP debug session.
+ *
+ * Owns the lifecycle of the spawned {@link NodeJSDebugAdapter} (launch /
+ * attach / disconnect), routes DAP requests through {@link sendRequest}, and
+ * surfaces runtime activity (logpoint hits, debugger events, tracked
+ * breakpoints) to MCP tools via bounded {@link RingBuffer} FIFOs so a long
+ * session cannot grow memory unbounded.
+ *
+ * State transitions are emitted on the underlying {@link EventEmitter} so the
+ * MCP server can re-publish them as notifications. All `attach*` /
+ * `enableDebuggerPid` entry points return an {@link MCPResponse} envelope and
+ * never throw to the caller.
+ */
 export class DAPClient extends EventEmitter {
   // Keep buffers bounded to avoid unbounded memory growth on long debugging sessions.
   // FIFO semantics: when full, the oldest entry is dropped.

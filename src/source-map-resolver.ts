@@ -88,6 +88,21 @@ function validateMcpCoordinates(
   return null;
 }
 
+/**
+ * Resolves TypeScript<->JavaScript coordinates against `*.js.map` files.
+ *
+ * Maintains two caches keyed by file mtime/size:
+ *
+ * 1. `traceMapCache` -- parsed {@link TraceMap} per `.map` file, plus a
+ *    `sourcesByBasename` index for O(1) source-name lookups.
+ * 2. `sourceMapListingCache` -- short-TTL directory listings so repeat
+ *    breakpoint placements do not rescan the build directory.
+ *
+ * All public methods accept and return DAP/MCP 1-based line / column numbers
+ * and convert to the trace-mapping 0-based column convention internally.
+ * Cache invalidation is automatic: rebuilds are paid only for `.map` files
+ * whose mtime+size actually changed on disk.
+ */
 export class SourceMapResolver {
   // mapFile -> { mtime, parsed TraceMap }. Trim oldest entries past the limit so a long
   // session debugging across many bundles doesn't grow unbounded. mtime+size tracking

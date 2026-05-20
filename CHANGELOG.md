@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 ## [Unreleased]
 
 ### Added
+- JSDoc summaries for `NodeDebuggerMCPServer`, `DAPDebuggerManager`, `DAPClient`, and `SourceMapResolver` describing the role of each class and the lifecycle / invariants the call sites rely on.
+- `engines.npm = ">=10"` so consumers using older npm get an actionable warning instead of opaque install failures (matches the "everyday development works on npm 10+" line in the README).
 - Documented `DAP_VERBOSE` environment flag and called out that verbose output may surface user-authored breakpoint conditions / logpoint templates ([README.md](README.md)).
 - Table of contents in README.
 - Threat model in [docs/SECURITY.md](docs/SECURITY.md) (link from README "Security model").
@@ -35,6 +37,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Removed
 - `goto` MCP tool. The underlying DAP handler always threw because V8 has no primitive jump operation; the tool only polluted `tools/list`. The DAP handler stays so external DAP clients still get a proper "not supported" response.
+- `dev:test:ts` npm script. It invoked `scripts/dev-test.sh ts` but the script ignored the argument and always built the TS fixture into JS before launching. The single `dev:test` script now documents the actual behaviour (TS sources are still debuggable via the emitted `*.js.map`).
 - Broken README link to `demo-ts-mcp-chrome-debugger-protocol.svg` (file does not exist; the GIF link remains).
 
 ### Security

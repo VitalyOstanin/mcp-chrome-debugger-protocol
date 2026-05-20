@@ -47,6 +47,17 @@ const packageManifest: PackageManifest = (() => {
   return { name: '@vitalyostanin/mcp-chrome-debugger-protocol', version: '0.0.0' };
 })();
 
+/**
+ * Top-level MCP server: owns the @modelcontextprotocol/sdk `McpServer`,
+ * registers every Chrome DevTools Protocol tool against the underlying
+ * {@link DAPClient}, and bridges DAP-style events back to MCP notifications.
+ *
+ * Lifecycle: construct -> `start()` connects the stdio transport -> the SDK
+ * dispatches each registered tool through `withErrorHandling`. Tool state
+ * (whether a CDP connection / pause is required) is enforced by
+ * {@link ToolStateManager} ahead of the handler so we never invoke CDP
+ * commands against a disconnected adapter.
+ */
 export class NodeDebuggerMCPServer {
   private readonly server: McpServer;
   private readonly dapClient: DAPClient;
