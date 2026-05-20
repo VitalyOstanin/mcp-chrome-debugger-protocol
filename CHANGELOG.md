@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-05-20
+
 ### Added
 - [docs/coordinates.md](docs/coordinates.md) -- single source of truth for the MCP/DAP (1-based) vs CDP/trace-mapping (mixed: 1-based lines, 0-based columns) coordinate convention. Replaces 8+ inline comments that restated the rule independently, so future readers do not have to reconstruct the convention from scattered notes.
 - `DEFAULT_THREAD_ID` exported from `src/constants.ts`. `dap-debugger-manager.ts` consumed `threadId ?? 1` as a literal; `nodejs-debug-adapter.ts` already had a private `THREAD_ID = 1`. Both now resolve to the same constant.
