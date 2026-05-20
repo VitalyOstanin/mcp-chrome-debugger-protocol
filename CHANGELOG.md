@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 ## [Unreleased]
 
 ### Added
+- [docs/coordinates.md](docs/coordinates.md) -- single source of truth for the MCP/DAP (1-based) vs CDP/trace-mapping (mixed: 1-based lines, 0-based columns) coordinate convention. Replaces 8+ inline comments that restated the rule independently, so future readers do not have to reconstruct the convention from scattered notes.
+- `DEFAULT_THREAD_ID` exported from `src/constants.ts`. `dap-debugger-manager.ts` consumed `threadId ?? 1` as a literal; `nodejs-debug-adapter.ts` already had a private `THREAD_ID = 1`. Both now resolve to the same constant.
 - JSDoc summaries for `NodeDebuggerMCPServer`, `DAPDebuggerManager`, `DAPClient`, and `SourceMapResolver` describing the role of each class and the lifecycle / invariants the call sites rely on.
 - `engines.npm = ">=10"` so consumers using older npm get an actionable warning instead of opaque install failures (matches the "everyday development works on npm 10+" line in the README).
 - Documented `DAP_VERBOSE` environment flag and called out that verbose output may surface user-authored breakpoint conditions / logpoint templates ([README.md](README.md)).
@@ -28,6 +30,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - `enableDebuggerPid` performs a best-effort `/proc/<pid>/comm` check on Linux and refuses with `PID_NOT_NODEJS` if the target is not a Node.js executable. Avoids sending SIGUSR1 to daemons that interpret it as "reopen logs" / "dump state" ([src/dap-client.ts](src/dap-client.ts)).
 
 ### Changed
+- `attach` tool: routes through `connectDefault()` only when neither `port` nor `address` was supplied. The previous behaviour fell back to `connectDefault()` whenever the *value* equalled the default, so an explicit `port=9229, address=localhost` was indistinguishable from "user did not pass anything". The zod schema no longer applies `.default(...)` for these two fields; the human-readable default still appears in the description.
 - `getLogpointHits` and `getDebuggerEvents` now accept `offset` / `limit` for paginated reads of the underlying ring buffers. Responses additionally expose `returnedCount` / `offset` / `limit` so clients can paginate without re-fetching the full buffer; default behaviour (no pagination args) is unchanged.
 - `pollForInspectorPort` uses exponential backoff (200 ms -> 2 s cap) between probe rounds instead of a flat 200 ms loop. Hammering all 22 candidate ports every 200 ms on a misconfigured attach is replaced with a sub-second tail that still picks up a debuggee promptly once it comes up.
 - `setBreakpoints` / `clearCDPBreakpoints` issue CDP commands in parallel via `Promise.all`. DAP id allocation stays serial for determinism.

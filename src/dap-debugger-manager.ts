@@ -1,7 +1,7 @@
 import type { DAPClient } from "./dap-client.js";
 import type { TruncationOptions } from "./types.js";
 import { findProjectRoot, withErrorHandling } from "./utils.js";
-import { DEFAULTS } from "./constants.js";
+import { DEFAULTS, DEFAULT_THREAD_ID } from "./constants.js";
 import type { DebugProtocol } from '@vscode/debugprotocol';
 import { resolve, relative } from "node:path";
 import { SourceMapResolver } from "./source-map-resolver.js";
@@ -153,7 +153,7 @@ export class DAPDebuggerManager {
     successMessage: string,
     operation: string,
   ) {
-    const effectiveThreadId = threadId ?? 1;
+    const effectiveThreadId = threadId ?? DEFAULT_THREAD_ID;
 
     return withErrorHandling(async () => {
       await this.dapClient.dapRequest(method, { threadId: effectiveThreadId });
@@ -459,7 +459,7 @@ export class DAPDebuggerManager {
       const response = await this.dapClient.dapRequest<DebugProtocol.StackTraceResponse>(
         'stackTrace',
         {
-          threadId: threadId ?? 1,
+          threadId: threadId ?? DEFAULT_THREAD_ID,
           startFrame: startFrame ?? 0,
           levels,
         },

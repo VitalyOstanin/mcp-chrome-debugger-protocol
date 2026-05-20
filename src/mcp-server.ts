@@ -11,7 +11,8 @@ import { ToolStateManager } from "./tool-state-manager.js";
 import { DEFAULTS, INSPECTOR_PORT_RANGE } from "./constants.js";
 import { logError } from "./logger.js";
 
-// Shared Zod schemas. MCP/DAP coordinate system is 1-based for both lines and columns.
+// Shared Zod schemas. Both lines and columns are 1-based on the MCP/DAP
+// boundary (see docs/coordinates.md).
 const lineNumberSchema = z.number().int().min(1).describe("Line number (1-based)");
 const columnNumberSchema = z.number().int().min(1).describe("Column number (1-based)");
 const portSchema = z.number().int().min(1).max(65535);
@@ -258,8 +259,12 @@ export class NodeDebuggerMCPServer {
         description: "Attach to Node.js debugger process using DAP",
         inputSchema: {
           url: z.string().optional().describe(`WebSocket URL of the debugger (e.g., ws://127.0.0.1:${DEFAULTS.INSPECTOR_PORT}/...)`),
-          port: portSchema.optional().default(DEFAULTS.INSPECTOR_PORT).describe(`Debug port (default: ${DEFAULTS.INSPECTOR_PORT})`),
-          address: z.string().optional().default(DEFAULTS.INSPECTOR_CLIENT_HOST).describe(`Debug address (default: ${DEFAULTS.INSPECTOR_CLIENT_HOST})`),
+          // Keep port/address as plain `.optional()` -- do NOT add `.default(...)` here.
+          // The handler below uses `port === undefined && address === undefined` to
+          // route through connectDefault(); a zod-side default would make that
+          // condition fire on "user explicitly set 9229/localhost" too.
+          port: portSchema.optional().describe(`Debug port (default: ${DEFAULTS.INSPECTOR_PORT})`),
+          address: z.string().optional().describe(`Debug address (default: ${DEFAULTS.INSPECTOR_CLIENT_HOST})`),
           processId: z.number().int().min(1).optional().describe("Process ID to attach to"),
           discoverTimeoutMs: z.number().int().min(0).optional().default(DEFAULTS.DISCOVER_TIMEOUT_MS).describe(`Max time (ms) to poll for the inspector port after sending SIGUSR1. 0 disables polling entirely (deadline = now), so attach returns immediately if strace did not detect the port. Pair with explicit ports=[] when you only want strace-based detection. Default ${DEFAULTS.DISCOVER_TIMEOUT_MS}.`),
           probeTimeoutMs: z.number().int().min(0).optional().default(DEFAULTS.PROBE_TIMEOUT_MS).describe(`Timeout (ms) for a single /json/version HTTP probe inside the polling loop. 0 collapses each probe round to "fail immediately"; the loop still iterates until discoverTimeoutMs elapses. Default ${DEFAULTS.PROBE_TIMEOUT_MS}.`),
@@ -268,8 +273,8 @@ export class NodeDebuggerMCPServer {
       },
       async ({
         url,
-        port = DEFAULTS.INSPECTOR_PORT,
-        address = DEFAULTS.INSPECTOR_CLIENT_HOST,
+        port,
+        address,
         processId,
         discoverTimeoutMs = DEFAULTS.DISCOVER_TIMEOUT_MS,
         probeTimeoutMs = DEFAULTS.PROBE_TIMEOUT_MS,
@@ -287,11 +292,18 @@ export class NodeDebuggerMCPServer {
               ports,
             });
           }
-          if (port === DEFAULTS.INSPECTOR_PORT && address === DEFAULTS.INSPECTOR_CLIENT_HOST) {
+          // Route through connectDefault() only when the caller passed neither
+          // port nor address. If they explicitly set the default value
+          // (port=9229, address=localhost), respect that as a deliberate
+          // configuration choice and go through connectUrl instead.
+          if (port === undefined && address === undefined) {
             return this.dapClient.connectDefault();
           }
 
-          return this.dapClient.connectUrl(`ws://${address}:${port}`);
+          const effectivePort = port ?? DEFAULTS.INSPECTOR_PORT;
+          const effectiveAddress = address ?? DEFAULTS.INSPECTOR_CLIENT_HOST;
+
+          return this.dapClient.connectUrl(`ws://${effectiveAddress}:${effectivePort}`);
         });
       },
     );

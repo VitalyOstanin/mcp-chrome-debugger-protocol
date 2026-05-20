@@ -25,6 +25,7 @@ import {
 import {
   BREAKPOINT_SEARCH_WINDOWS,
   DAP_ERROR_CODES,
+  DEFAULT_THREAD_ID,
   DEFAULTS,
   END_COLUMN_LARGE,
 } from './constants.js';
@@ -88,7 +89,10 @@ type VariableHandle =
   | { kind: 'object'; objectId: string };
 
 export class NodeJSDebugAdapter extends DebugSession {
-  private static readonly THREAD_ID = 1;
+  // Re-exposed locally so call sites read NodeJSDebugAdapter.THREAD_ID instead
+  // of pulling in DEFAULT_THREAD_ID at every reference. Both literals are the
+  // same and resolve to the canonical constant in src/constants.ts.
+  private static readonly THREAD_ID = DEFAULT_THREAD_ID;
 
   private nodeProcess: ChildProcess | null = null;
   private readonly breakpoints = new Map<string, NodeJSRuntimeBreakpoint[]>();

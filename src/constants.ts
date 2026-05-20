@@ -33,6 +33,12 @@ export const DEFAULTS = {
   SCRIPT_LOOKUP_DEFAULT_TIMEOUT_MS: 1_000,
 } as const;
 
+// V8 inspector exposes the host JS thread as a single DAP thread; the adapter
+// publishes it with id=1 and every DAP request that needs a `threadId` defaults
+// to this. Kept in constants so the adapter and the higher-level manager agree
+// on the literal without re-declaring it.
+export const DEFAULT_THREAD_ID = 1;
+
 // Synthetic "wide enough" right edge for Debugger.getPossibleBreakpoints when
 // the caller did not pass an endColumn. CDP requires a column; 200 is large
 // enough for any realistic source line and small enough to avoid CDP issues.
