@@ -38,9 +38,22 @@ class RingBuffer<T> {
   }
 
   toArray(): T[] {
-    const out: T[] = new Array<T>(this.size);
+    return this.slice(0, this.size);
+  }
 
-    for (let i = 0; i < this.size; i++) {
+  // Logical-order paginated read: [offset, offset+limit). offset>=size returns [].
+  // Callers can avoid materialising the entire buffer just to look at a tail or
+  // a window — important for getLogpointHits/getDebuggerEvents where the wire
+  // payload would otherwise grow with MAX_BUFFER_SIZE regardless of need.
+  slice(offset: number, limit: number): T[] {
+    if (offset < 0) offset = 0;
+    if (limit < 0) limit = 0;
+
+    const start = Math.min(offset, this.size);
+    const end = Math.min(this.size, start + limit);
+    const out: T[] = new Array<T>(end - start);
+
+    for (let i = start; i < end; i++) {
       const item = this.items[(this.head + i) % this.capacity];
 
       if (item === undefined) {
@@ -49,10 +62,14 @@ class RingBuffer<T> {
         // (corrupted internal state) — fail loudly instead of leaking undefined.
         throw new Error(`RingBuffer invariant violated: missing item at logical index ${i}`);
       }
-      out[i] = item;
+      out[i - start] = item;
     }
 
     return out;
+  }
+
+  get length(): number {
+    return this.size;
   }
 
   clear(): void {
@@ -632,6 +649,13 @@ export class DAPClient extends EventEmitter {
 
     const deadline = Date.now() + (opts?.discoverTimeoutMs ?? DEFAULTS.DISCOVER_TIMEOUT_MS);
     const probeTimeoutMs = opts?.probeTimeoutMs ?? DEFAULTS.PROBE_TIMEOUT_MS;
+    // Exponential backoff between rounds (200 -> 400 -> 800 -> ... capped at
+    // 2000 ms). Pre-1.7 we hammered all 22 candidates every 200 ms regardless
+    // of how long the debuggee had been silent, which burns CPU + FD churn on
+    // a misconfigured attach. The cap keeps the worst-case slip below
+    // INSPECTOR_POLL_INTERVAL_MS_MAX so a debuggee that comes up mid-poll is
+    // still picked up promptly.
+    let delayMs: number = DEFAULTS.INSPECTOR_POLL_INTERVAL_MS;
 
     // do-while guarantees at least one probe round even when discoverTimeoutMs<=0,
     // so a caller passing 0 still gets a single best-effort lookup instead of
@@ -645,7 +669,8 @@ export class DAPClient extends EventEmitter {
       if (hit) return hit.cand;
 
       if (Date.now() >= deadline) break;
-      await sleep(DEFAULTS.INSPECTOR_POLL_INTERVAL_MS);
+      await sleep(delayMs);
+      delayMs = Math.min(delayMs * 2, DEFAULTS.INSPECTOR_POLL_INTERVAL_MS_MAX);
     } while (Date.now() < deadline);
 
     return undefined;
@@ -889,16 +914,24 @@ export class DAPClient extends EventEmitter {
   }
 
   // Logpoint and event management
-  getLogpointHits(): LogpointHit[] {
-    return this.logpointHits.toArray();
+  getLogpointHits(opts?: { offset?: number | undefined; limit?: number | undefined }): { items: LogpointHit[]; totalCount: number } {
+    const totalCount = this.logpointHits.length;
+    const offset = opts?.offset ?? 0;
+    const limit = opts?.limit ?? totalCount;
+
+    return { items: this.logpointHits.slice(offset, limit), totalCount };
   }
 
   clearLogpointHits(): void {
     this.logpointHits.clear();
   }
 
-  getDebuggerEvents(): DebuggerEvent[] {
-    return this.debuggerEvents.toArray();
+  getDebuggerEvents(opts?: { offset?: number | undefined; limit?: number | undefined }): { items: DebuggerEvent[]; totalCount: number } {
+    const totalCount = this.debuggerEvents.length;
+    const offset = opts?.offset ?? 0;
+    const limit = opts?.limit ?? totalCount;
+
+    return { items: this.debuggerEvents.slice(offset, limit), totalCount };
   }
 
   clearDebuggerEvents(): void {

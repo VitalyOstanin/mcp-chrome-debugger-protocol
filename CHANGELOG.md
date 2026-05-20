@@ -27,6 +27,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - `enableDebuggerPid` performs a best-effort `/proc/<pid>/comm` check on Linux and refuses with `PID_NOT_NODEJS` if the target is not a Node.js executable. Avoids sending SIGUSR1 to daemons that interpret it as "reopen logs" / "dump state" ([src/dap-client.ts](src/dap-client.ts)).
 
 ### Changed
+- `getLogpointHits` and `getDebuggerEvents` now accept `offset` / `limit` for paginated reads of the underlying ring buffers. Responses additionally expose `returnedCount` / `offset` / `limit` so clients can paginate without re-fetching the full buffer; default behaviour (no pagination args) is unchanged.
+- `pollForInspectorPort` uses exponential backoff (200 ms -> 2 s cap) between probe rounds instead of a flat 200 ms loop. Hammering all 22 candidate ports every 200 ms on a misconfigured attach is replaced with a sub-second tail that still picks up a debuggee promptly once it comes up.
 - `setBreakpoints` / `clearCDPBreakpoints` issue CDP commands in parallel via `Promise.all`. DAP id allocation stays serial for determinism.
 - `truncateResult` measures payload size against the wire format (no indent), eliminating false-positive "Response too large" responses on payloads that would fit; double `JSON.stringify` on the happy path is gone.
 - `CDPTransport.connect / sendCommand / enableDomains` no longer `emit('error', ...) + throw`. Only `throw` -- callers see the same failure once.

@@ -15,8 +15,13 @@ export const DEFAULTS = {
   PROBE_TIMEOUT_MS: 400,
   // Wait between strace lines before deciding the inspector did not announce.
   STRACE_TIMEOUT_MS: 8_000,
-  // Sleep between inspector probe rounds in pollForInspectorPort.
+  // Sleep between inspector probe rounds in pollForInspectorPort. The interval
+  // starts at INSPECTOR_POLL_INTERVAL_MS and doubles each round (exponential
+  // backoff) up to INSPECTOR_POLL_INTERVAL_MS_MAX. The cap keeps the worst-case
+  // pickup slip below ~2 s so a debuggee that comes up mid-poll is still
+  // detected promptly, while idle polls stop hammering the socket every 200 ms.
   INSPECTOR_POLL_INTERVAL_MS: 200,
+  INSPECTOR_POLL_INTERVAL_MS_MAX: 2_000,
   // `which`-style command availability probe (isCommandAvailable).
   COMMAND_AVAILABILITY_TIMEOUT_MS: 1_000,
   // Truncation default for tool responses (manager.truncateResult).

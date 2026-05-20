@@ -269,12 +269,13 @@ export class DAPDebuggerManager {
     }, { operation: 'evaluate expression', expression, frameId });
   }
 
-  async getLogpointHits() {
+  async getLogpointHits(pagination?: { offset?: number | undefined; limit?: number | undefined }) {
     return withErrorHandling(() => {
-      const hits = this.dapClient.getLogpointHits();
+      const { items, totalCount } = this.dapClient.getLogpointHits(pagination);
+      const offset = pagination?.offset ?? 0;
 
       return Promise.resolve({
-        hits: hits.map(hit => ({
+        hits: items.map(hit => ({
           timestamp: hit.timestamp.toISOString(),
           executionContextId: hit.executionContextId,
           message: hit.message,
@@ -282,7 +283,14 @@ export class DAPDebuggerManager {
           payload: hit.payload,
           level: hit.level ?? 'info',
         })),
-        totalCount: hits.length,
+        // totalCount is the size of the underlying buffer; returnedCount /
+        // offset / limit describe the actual slice on the wire so a client
+        // can implement keyset-style pagination without re-fetching the whole
+        // buffer each call.
+        totalCount,
+        returnedCount: items.length,
+        offset,
+        ...(pagination?.limit !== undefined ? { limit: pagination.limit } : {}),
         interpolationSupport: true,
       });
     }, { operation: 'get logpoint hits' });
@@ -296,17 +304,21 @@ export class DAPDebuggerManager {
     }, { operation: 'clear logpoint hits' });
   }
 
-  async getDebuggerEvents() {
+  async getDebuggerEvents(pagination?: { offset?: number | undefined; limit?: number | undefined }) {
     return withErrorHandling(() => {
-      const events = this.dapClient.getDebuggerEvents();
+      const { items, totalCount } = this.dapClient.getDebuggerEvents(pagination);
+      const offset = pagination?.offset ?? 0;
 
       return Promise.resolve({
-        events: events.map(event => ({
+        events: items.map(event => ({
           timestamp: event.timestamp.toISOString(),
           type: event.type,
           data: event.data,
         })),
-        totalCount: events.length,
+        totalCount,
+        returnedCount: items.length,
+        offset,
+        ...(pagination?.limit !== undefined ? { limit: pagination.limit } : {}),
       });
     }, { operation: 'get debugger events' });
   }

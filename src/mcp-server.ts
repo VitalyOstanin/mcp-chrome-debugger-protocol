@@ -522,10 +522,13 @@ export class NodeDebuggerMCPServer {
       "getLogpointHits",
       {
         title: "Get Logpoint Hits",
-        description: "Get all captured logpoint hits from console API calls",
-        inputSchema: {},
+        description: "Get captured logpoint hits from console API calls (paginated: omit offset/limit to return everything; default offset=0)",
+        inputSchema: {
+          offset: z.number().int().min(0).optional().describe("Zero-based index into the buffer; older hits sit at smaller indices"),
+          limit: z.number().int().min(1).optional().describe("Maximum number of hits to return starting at offset"),
+        },
       },
-      async () => this.runOpenTool(() => this.debuggerManager.getLogpointHits()),
+      async ({ offset, limit }) => this.runOpenTool(() => this.debuggerManager.getLogpointHits({ offset, limit })),
     );
 
     this.server.registerTool(
@@ -542,10 +545,13 @@ export class NodeDebuggerMCPServer {
       "getDebuggerEvents",
       {
         title: "Get Debugger Events",
-        description: "Get all captured debugger pause/resume events",
-        inputSchema: {},
+        description: "Get captured debugger pause/resume events (paginated: omit offset/limit to return everything; default offset=0)",
+        inputSchema: {
+          offset: z.number().int().min(0).optional().describe("Zero-based index into the buffer; older events sit at smaller indices"),
+          limit: z.number().int().min(1).optional().describe("Maximum number of events to return starting at offset"),
+        },
       },
-      async () => this.runOpenTool(() => this.debuggerManager.getDebuggerEvents()),
+      async ({ offset, limit }) => this.runOpenTool(() => this.debuggerManager.getDebuggerEvents({ offset, limit })),
     );
 
     this.server.registerTool(
