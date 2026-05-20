@@ -35,12 +35,18 @@ import { isVerbose } from './logger.js';
 // in one helper so the rest of the adapter stays type-safe.
 function assignDapBreakpointFields(
   bp: Breakpoint,
-  fields: Pick<DebugProtocol.Breakpoint, 'source' | 'id'>,
+  fields: Pick<DebugProtocol.Breakpoint, 'source' | 'id' | 'message'>,
 ): void {
   const target = bp as unknown as DebugProtocol.Breakpoint;
 
   if (fields.source !== undefined) target.source = fields.source;
   if (fields.id !== undefined) target.id = fields.id;
+  if (fields.message !== undefined) target.message = fields.message;
+}
+
+interface BreakpointPlacement {
+  cdpResult: Protocol.Debugger.SetBreakpointByUrlResponse | null;
+  reason?: string;
 }
 
 export interface NodeJSLaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
@@ -782,8 +788,10 @@ export class NodeJSDebugAdapter extends DebugSession {
     line: number,
     column: number,
     sourceBreakpoint: DebugProtocol.SourceBreakpoint,
-  ): Promise<Protocol.Debugger.SetBreakpointByUrlResponse | null> {
-    if (!this.cdpTransport) return null;
+  ): Promise<BreakpointPlacement> {
+    if (!this.cdpTransport) {
+      return { cdpResult: null, reason: 'CDP transport not available' };
+    }
 
     const { targetPath, targetLine, targetColumn } = await this.resolveTargetLocation(path, line, column);
     // For logpoints, swap the user condition for the synthetic logpoint expression.
@@ -793,10 +801,12 @@ export class NodeJSDebugAdapter extends DebugSession {
     const scriptIdResult = await this.placeBreakpointByScriptId(targetPath, targetLine, targetColumn, breakpointCondition);
 
     if (scriptIdResult) {
-      return scriptIdResult.cdpResult;
+      return { cdpResult: scriptIdResult.cdpResult };
     }
 
-    return this.placeBreakpointByUrl(targetPath, targetLine, targetColumn, breakpointCondition);
+    const urlResult = await this.placeBreakpointByUrl(targetPath, targetLine, targetColumn, breakpointCondition);
+
+    return { cdpResult: urlResult };
   }
 
   // Build the runtime + DAP breakpoint pair, reusing prior dapId when signature matches.
@@ -805,7 +815,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     line: number,
     column: number,
     sourceBreakpoint: DebugProtocol.SourceBreakpoint,
-    cdpResult: Protocol.Debugger.SetBreakpointByUrlResponse | null,
+    placement: BreakpointPlacement,
     previousByKey: Map<string, number>,
   ): { runtimeBp: NodeJSRuntimeBreakpoint; actualBp: Breakpoint } {
     const key = this.breakpointKey(line, column, sourceBreakpoint.condition, sourceBreakpoint.logMessage);
@@ -815,8 +825,8 @@ export class NodeJSDebugAdapter extends DebugSession {
 
     // Use a separate counter for synthetic CDP-style ids so they never collide
     // with the DAP id range (`dapId` consumes nextBreakpointId).
-    const breakpointId = cdpResult?.breakpointId ?? `bp_${this.nextSyntheticCdpId++}`;
-    const verified = cdpResult !== null;
+    const breakpointId = placement.cdpResult?.breakpointId ?? `bp_${this.nextSyntheticCdpId++}`;
+    const verified = placement.cdpResult !== null;
     const runtimeBp: NodeJSRuntimeBreakpoint = {
       id: breakpointId,
       dapId,
@@ -839,6 +849,11 @@ export class NodeJSDebugAdapter extends DebugSession {
         path,
       },
       id: dapId,
+      // When the breakpoint failed to bind, surface the reason in DAP
+      // Breakpoint.message so DAP clients (and the MCP setBreakpoints tool
+      // response) can show the user *why* their breakpoint is greyed out
+      // instead of just `verified: false`.
+      ...(!verified && placement.reason !== undefined ? { message: placement.reason } : {}),
     });
 
     return { runtimeBp, actualBp };
@@ -878,24 +893,23 @@ export class NodeJSDebugAdapter extends DebugSession {
         const line = clientLines[i] ?? sourceBreakpoint.line;
         // Use 1-based default column to satisfy source map resolution (resolver rejects 0)
         const column = sourceBreakpoint.column ?? 1;
-        let cdpResult: Protocol.Debugger.SetBreakpointByUrlResponse | null = null;
+        let placement: BreakpointPlacement;
 
         try {
-          cdpResult = await this.placeSingleBreakpoint(path, line, column, sourceBreakpoint);
+          placement = await this.placeSingleBreakpoint(path, line, column, sourceBreakpoint);
         } catch (error) {
-          this.diagnostic(
-            `Failed to set breakpoint at ${path}:${line}: ${
-              errorMessage(error)
-            }\n`,
-          );
+          const reason = errorMessage(error);
+
+          this.diagnostic(`Failed to set breakpoint at ${path}:${line}: ${reason}\n`);
+          placement = { cdpResult: null, reason };
         }
 
-        const { runtimeBp, actualBp } = this.buildBreakpointEntry(path, line, column, sourceBreakpoint, cdpResult, previousByKey);
+        const { runtimeBp, actualBp } = this.buildBreakpointEntry(path, line, column, sourceBreakpoint, placement, previousByKey);
 
         runtimeBreakpoints.push(runtimeBp);
         actualBreakpoints.push(actualBp);
 
-        if (cdpResult && sourceBreakpoint.logMessage) {
+        if (placement.cdpResult && sourceBreakpoint.logMessage) {
           this.diagnostic(`Logpoint set at ${path}:${line} - Message: "${sourceBreakpoint.logMessage}"\n`);
         }
       }
