@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-05-21
+
+### Added
+- CLI now responds to `--help` / `-h` and `--version` / `-V`; prints a short description, the list of relevant environment variables (`DAP_VERBOSE`, `MCP_CDP_ALLOW_REMOTE`) and exits 0. Useful when the binary is run by hand for inspection ([src/index.ts](src/index.ts)).
+- Graceful, idempotent shutdown on `SIGINT` / `SIGTERM`: the MCP server now exposes `close()` which disconnects the DAP client and closes the stdio transport before the process exits.
+- Domain error hierarchy (`NotFoundError`, `NotConnectedError`, `ProtocolError`, `ValidationError`) in [src/errors.ts](src/errors.ts). `withErrorHandling` reads the carried `code` from `DomainError`, so MCP clients can branch on `NOT_FOUND` / `NOT_CONNECTED` / `VALIDATION_ERROR` / `PROTOCOL_ERROR` instead of parsing `message`. Plain `Error` continues to surface as `OPERATION_FAILED`.
+- `getDebuggerState` now reports `eventErrorCounts` -- a per-CDP-event tally of swallowed handler errors (`Runtime.bindingCalled`, `Runtime.executionContextCreated`, `Debugger.scriptParsed`). Lets operators spot a silent regression without enabling `DAP_VERBOSE` on a hot session.
+- `TrackedBreakpoint.sourceMapResolution` is now filled with the actual placement result (`used`, `sourceMapFile`, `matchedSource`, `targetFile`, `targetLocation`) instead of the hard-coded `{ used: false }` placeholder.
+- `mapWithConcurrency` helper in [src/utils.ts](src/utils.ts) -- bounded parallel `map` that preserves input order; used by `setBreakpoints` to cap the in-flight CDP requests.
+
+### Changed
+- **safe-stable-stringify everywhere in `src/*`.** Cache keys, log messages, MCP wire format and CDP payload serialisation all go through `safeStringify`. Only documented exception: literal `JSON.stringify` tokens emitted into the debuggee runtime via `Runtime.evaluate`, where `safe-stable-stringify` is not available. Project rule recorded in [CLAUDE.md](CLAUDE.md).
+- `setExceptionBreakpoints` no longer drops `filters=['caught']` silently. The four CDP states (`none` / `caught` / `uncaught` / `all`) are now reachable, including the previously missing `caught`-only branch.
+- `exceptionInfo` reports `breakMode='never'` when the adapter has exception breaking disabled, instead of always claiming `'unhandled'`. Three CDP states map to the matching DAP `ExceptionBreakMode` values (`none` → `never`, `uncaught` → `unhandled`, `all`/`caught` → `always`).
+- `connectUrl` rejects malformed URLs with a structured `VALIDATION_ERROR` envelope (`createErrorResponse`) rather than silently parsing a `:NNN` substring out of the middle of arbitrary text. The regex fallback is anchored to a trailing `:PORT` (`/:(\d+)(?:\/.*)?$/`).
+- `truncateResult` no longer pays a second `JSON.stringify` on the happy path -- size is measured during the truncating walk. `originalSize` is now reported only when the response was truncated.
+- `collectSourceMapFiles` walks subdirectories in parallel via `Promise.all` instead of awaiting each branch sequentially.
+- `setBreakpoints` caps in-flight CDP placement work at `DEFAULTS.SET_BREAKPOINTS_CONCURRENCY=8`; DAP id allocation remains serial.
+- `removeBreakpointByDapId` and `removeBreakpoint` use a direct `Map.get` lookup (`getTrackedBreakpoint(id)`) instead of a linear scan over `trackedBreakpoints.values()`.
+- `siblingMapCandidates` / `collectMapFilesForResolve` deduplicate paths via `Set` instead of `Array.includes` inside the loop.
+- `placeBreakpointByScriptId` catch path now records a diagnostic (`scriptId-based placement failed: ...; falling back to URL placement`) so a regression in `getPossibleBreakpoints` / `setBreakpoint` is not masked by the URL fallback.
+- `setBreakPointsRequest` failure messages include the failing stage (`snapshot` / `clear` / `place` / `build`) -- a stage-tagged "Set breakpoints failed at stage=clear: ..." is far more diagnostic than the previous flat string.
+- `lookupDottedPath` stops descent on scalar intermediates (`typeof acc === 'object'`), so a placeholder like `{a.b.c}` where `a.b` is `0` renders `undefined` once instead of throwing in the runtime expression.
+- `enrichAttachResult` short-circuits to the raw attach result when the parsed payload is a JSON array, instead of spreading numeric keys into the success envelope.
+- `disconnect()` cleanup paths log warnings via `logError` instead of swallowing every adapter / transport failure silently.
+- CDP `Debugger.enable` / `Runtime.enable` / `Console.enable` / `Profiler.enable` are issued in parallel via `Promise.all` in [src/cdp-transport.ts](src/cdp-transport.ts) (each domain still error-isolated via per-domain try/catch).
+- `getScriptIdForPath` / `breakpointLocations` use named timeouts from `DEFAULTS` (`SCRIPT_LOOKUP_DEFAULT_TIMEOUT_MS`, `BREAKPOINT_SCRIPT_LOOKUP_TIMEOUT_MS`, `BREAKPOINT_LOCATIONS_LOOKUP_TIMEOUT_MS`) instead of magic literals.
+- `scriptsById` / `scriptsByUrl` / `scriptsByBasename` are LRU-bounded at `MAX_SCRIPTS=5000`; long debug sessions that load tens of thousands of `eval` / `vm.compileFunction` scripts no longer grow these maps unboundedly.
+- Test fixtures (`tests/fixtures/test-app/*`, `tests/fixtures/test-app-js/*`) bumped to `express ^5.x` to match the project's own dependency; `target: "ES2022"` in the TS fixture for closer parity with the main project.
+- `tests/utils/debugger-test-helper.ts`: `BreakpointInfo` is now an intersection of `DebugProtocol.Breakpoint` with `{ id: number }`, so the id stays required for test consumers.
+- `test-app-manager.ts` walks the project root via a single helper instead of two duplicated `path.dirname` loops.
+- `tests/integration/logpoint-check.test.ts` split one large `it(...)` into three focused cases (fib/sum logpoint, method-call logpoint, generated-position resolution) with `testApp.start` moved into `beforeEach`.
+- `package.json` exposes a `format` alias (`npm run format` → `npm run lint:fix`).
+- `tsconfig.build.json` excludes `src/**/*.bench.ts` so benchmarks no longer ship in the published tarball.
+- `eslint.config.mjs` consolidates ignores into a single block with an explanatory comment.
+- `.github/dependabot.yml` adds a dedicated `production` group covering production dependencies on minor + patch updates.
+
+### Fixed
+- `Error.cause` is now preserved at every `throw new Error(...)` re-throw site in `dap-debugger-manager.ts`, `dap-client.ts`, `nodejs-debug-adapter.ts`. `DAPClient.sendRequest` no longer collapses errors to `new Error(String(error))`.
+- `tests/fixtures/test-app/src/index.ts` keeps `count` in use (`let sum = count - count`) so TypeScript no longer warns about the unused local; `(req, res)` → `(_req, res)` on Express handlers that do not read the request. Line numbers used as breakpoint targets by integration tests are preserved.
+- `tests/integration/breakpoints.test.ts` pins the expression-interpolation logpoint to compiled-JS line 30 (the `let sum = ...` initialiser) so it matches the `target: ES2022` emit layout of the test fixture.
+
+### Removed
+- Top-level `BUGFIX-source-map-path-normalization.md` -- the historical context is already captured in CHANGELOG 1.1.1 and in the integration test describing the case. The test comment now references CHANGELOG instead of the deleted file.
+
+### Infra / CI
+- `codecov/codecov-action` pinned to commit SHA (`e79a6962...`, v6.0.1) instead of the previous tag-object SHA.
+- `actions/checkout` and `actions/setup-node` pinned to commit SHAs of v6.0.2 / v6.4.0 respectively, matching the existing third-party SHA pinning policy.
+- `npm-publish.yml` `build` job now runs on a matrix `[22, 24]`, matching `node.js.yml`. The smoke pack-and-install step stays on Node 22 only.
+
 ## [1.7.0] - 2026-05-20
 
 ### Added
