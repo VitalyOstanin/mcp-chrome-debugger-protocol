@@ -16,6 +16,14 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - Source-map resolution accepts `.js/.jsx/.mjs/.cjs` originals when the path looks like authored source or has an adjacent `*.map`.
 - Strict suffix-match in `SourceMapResolver.matchSource` when `originalSourcePath` is provided, preventing wrong sibling pick in monorepos with duplicate basenames.
 
+### Fixed
+- `RingBuffer.toArray` no longer relies on a non-null assertion; the invariant is enforced at read time so a corrupted internal state fails loudly instead of leaking `undefined` to callers ([src/dap-client.ts](src/dap-client.ts)).
+- `pollForInspectorPort` now guarantees a single probe round even when `discoverTimeoutMs<=0`. Previously a caller passing `0` got `undefined` without any probe being attempted ([src/dap-client.ts](src/dap-client.ts)).
+- `enrichAttachResult` no longer wraps an ErrorResponse (`success: false`) in `createSuccessResponse`; the failed envelope is preserved and diagnostic context (`activation`, `detectedPort`, `webSocketUrl`) is appended via `createErrorResponse` ([src/dap-client.ts](src/dap-client.ts)).
+- `findBreakpointLocationInRange` now reports when the chosen location was a fallback outside the requested window. The placement carries the reason `"moved to nearest available statement"` up to `DebugProtocol.Breakpoint.message` so users see *why* the actual line drifted ([src/nodejs-debug-adapter.ts](src/nodejs-debug-adapter.ts)).
+- `simulateLogpointHit` iterates all matching logpoints on a line via `filter`; previously `find` silently dropped every logpoint after the first when multiple were attached to the same line ([src/nodejs-debug-adapter.ts](src/nodejs-debug-adapter.ts)).
+- `enableDebuggerPid` performs a best-effort `/proc/<pid>/comm` check on Linux and refuses with `PID_NOT_NODEJS` if the target is not a Node.js executable. Avoids sending SIGUSR1 to daemons that interpret it as "reopen logs" / "dump state" ([src/dap-client.ts](src/dap-client.ts)).
+
 ### Changed
 - `setBreakpoints` / `clearCDPBreakpoints` issue CDP commands in parallel via `Promise.all`. DAP id allocation stays serial for determinism.
 - `truncateResult` measures payload size against the wire format (no indent), eliminating false-positive "Response too large" responses on payloads that would fit; double `JSON.stringify` on the happy path is gone.

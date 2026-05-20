@@ -10,18 +10,19 @@ import { kill } from 'node:process';
 import { spawn } from 'node:child_process';
 import { setTimeout as scheduleTimeout } from 'node:timers';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 
 // Bounded FIFO buffer with O(1) push and amortised O(1) drop-oldest. The previous
 // implementation used Array.splice(0, n), which is O(n) on every overflow and
 // dominated CPU under high logpoint hit rates.
 class RingBuffer<T> {
-  private items: T[];
+  private items: Array<T | undefined>;
   private head = 0;
   private size = 0;
 
   constructor(private readonly capacity: number) {
-    this.items = new Array<T>(capacity);
+    this.items = new Array<T | undefined>(capacity);
   }
 
   push(item: T): void {
@@ -40,14 +41,22 @@ class RingBuffer<T> {
     const out: T[] = new Array<T>(this.size);
 
     for (let i = 0; i < this.size; i++) {
-      out[i] = this.items[(this.head + i) % this.capacity]!;
+      const item = this.items[(this.head + i) % this.capacity];
+
+      if (item === undefined) {
+        // Invariant: push() only ever writes T, and we read exactly `size` slots
+        // starting at `head`. Reaching this branch means push() was bypassed
+        // (corrupted internal state) — fail loudly instead of leaking undefined.
+        throw new Error(`RingBuffer invariant violated: missing item at logical index ${i}`);
+      }
+      out[i] = item;
     }
 
     return out;
   }
 
   clear(): void {
-    this.items = new Array<T>(this.capacity);
+    this.items = new Array<T | undefined>(this.capacity);
     this.head = 0;
     this.size = 0;
   }
@@ -610,7 +619,10 @@ export class DAPClient extends EventEmitter {
     const deadline = Date.now() + (opts?.discoverTimeoutMs ?? DEFAULTS.DISCOVER_TIMEOUT_MS);
     const probeTimeoutMs = opts?.probeTimeoutMs ?? DEFAULTS.PROBE_TIMEOUT_MS;
 
-    while (Date.now() < deadline) {
+    // do-while guarantees at least one probe round even when discoverTimeoutMs<=0,
+    // so a caller passing 0 still gets a single best-effort lookup instead of
+    // silently returning undefined without ever probing.
+    do {
       const results = await Promise.all(
         candidates.map(async (cand) => ({ cand, ok: await this.probeInspector(cand, probeTimeoutMs) })),
       );
@@ -618,8 +630,9 @@ export class DAPClient extends EventEmitter {
 
       if (hit) return hit.cand;
 
+      if (Date.now() >= deadline) break;
       await sleep(DEFAULTS.INSPECTOR_POLL_INTERVAL_MS);
-    }
+    } while (Date.now() < deadline);
 
     return undefined;
   }
@@ -629,22 +642,35 @@ export class DAPClient extends EventEmitter {
     activation: 'strace' | 'poll' | 'timeout',
     detectedPort: number,
   ): MCPResponse {
-    try {
-      const parsed = JSON.parse(attachResult.content[0]!.text);
+    let parsed: unknown;
 
-      return createSuccessResponse({
-        ...parsed,
-        debug: {
-          activation,
-          detectedPort,
-          webSocketUrl: this.webSocketUrl,
-        },
-      });
+    try {
+      parsed = JSON.parse(attachResult.content[0]!.text);
     } catch {
       // attachResult.content[0].text was not JSON we could enrich; return the
       // raw result unchanged so the caller still sees attach success/failure.
       return attachResult;
     }
+
+    const debug = { activation, detectedPort, webSocketUrl: this.webSocketUrl };
+    const isRecord = typeof parsed === 'object' && parsed !== null;
+    const payload = isRecord ? (parsed as Record<string, unknown>) : { value: parsed };
+
+    // Do not promote an attach failure into a success by wrapping the failed
+    // ErrorResponse in createSuccessResponse. If the parsed payload signals
+    // failure, preserve the error envelope and append the diagnostic context.
+    if (isRecord && (payload as { success?: unknown }).success === false) {
+      const errorText = typeof payload.error === 'string' ? payload.error : 'Attach failed';
+      const details = typeof payload.details === 'object' && payload.details !== null
+        ? (payload.details as Record<string, unknown>)
+        : {};
+      const code = typeof payload.code === 'string' ? payload.code : 'ATTACH_FAILED';
+      const message = typeof payload.message === 'string' ? payload.message : 'Attach result reported failure';
+
+      return createErrorResponse(errorText, message, code, { ...details, debug });
+    }
+
+    return createSuccessResponse({ ...payload, debug });
   }
 
   async enableDebuggerPid(
@@ -670,6 +696,38 @@ export class DAPClient extends EventEmitter {
           'PID_NOT_FOUND',
           { pid },
         );
+      }
+
+      // Linux: best-effort sanity check that the target looks like Node.js
+      // before we send SIGUSR1. /proc/<pid>/comm holds the (truncated) process
+      // name. If the file is unreadable or the platform is not Linux we skip
+      // silently — the kill(pid, 0) gate above already enforces existence and
+      // permission. On non-Node.js targets SIGUSR1 frequently has a useful
+      // behaviour (log reopen, state dump) we have no right to trigger.
+      if (process.platform === 'linux') {
+        try {
+          const comm = (await readFile(`/proc/${pid}/comm`, 'utf8')).trim();
+          // /proc/<pid>/comm is truncated to TASK_COMM_LEN (16 bytes incl NUL).
+          // Match common Node.js executable names: "node", "nodejs", and the
+          // 15-byte "iojs"/"node ${name}" patterns produced by process.title.
+          const looksLikeNode = /^(node|nodejs|iojs)\b/i.test(comm);
+
+          if (!looksLikeNode) {
+            return createErrorResponse(
+              'Target process is not Node.js',
+              `pid=${pid} has process name '${comm}', which is not a Node.js executable. ` +
+              'SIGUSR1 to a non-Node process can trigger destructive side effects (log reopen, ' +
+              'state dump). Refusing to proceed.',
+              'PID_NOT_NODEJS',
+              { pid, comm },
+            );
+          }
+        } catch (commError) {
+          const code = (commError as NodeJS.ErrnoException | undefined)?.code;
+
+          // EACCES / ENOENT here just means we cannot verify; log and continue.
+          logVerbose('dap-client', `Could not read /proc/${pid}/comm (${code ?? 'unknown'}), skipping Node.js sanity check`);
+        }
       }
 
       // Send SIGUSR1 to request inspector activation.

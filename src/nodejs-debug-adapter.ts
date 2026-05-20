@@ -650,7 +650,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     baseCol0: number,
     startDelta: number,
     endDelta: number,
-  ): Promise<Protocol.Debugger.BreakLocation | undefined> {
+  ): Promise<{ location: Protocol.Debugger.BreakLocation; moved: boolean } | undefined> {
     if (!this.cdpTransport) return undefined;
 
     const start: Protocol.Debugger.Location = {
@@ -675,11 +675,18 @@ export class NodeJSDebugAdapter extends DebugSession {
       (l) => l.lineNumber > baseLine0 || (l.lineNumber === baseLine0 && (l.columnNumber ?? 0) >= baseCol0),
     );
 
-    if (after.length) return after[0];
+    if (after.length) return { location: after[0]!, moved: false };
 
-    return locs.sort(
+    // No statement at or beyond the requested position within the search
+    // window — fall back to the nearest available statement and flag it so the
+    // caller can surface a DAP Breakpoint.message explaining the shift.
+    const fallback = locs.slice().sort(
       (a, b) => Math.abs(a.lineNumber - baseLine0) - Math.abs(b.lineNumber - baseLine0),
     )[0];
+
+    if (!fallback) return undefined;
+
+    return { location: fallback, moved: true };
   }
 
   private async placeBreakpointByScriptId(
@@ -687,7 +694,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     targetLine: number,
     targetColumn: number,
     breakpointCondition: string | undefined,
-  ): Promise<{ cdpResult: Protocol.Debugger.SetBreakpointByUrlResponse; line: number; column: number } | null> {
+  ): Promise<{ cdpResult: Protocol.Debugger.SetBreakpointByUrlResponse; line: number; column: number; reason?: string } | null> {
     if (!this.cdpTransport) return null;
 
     const scriptId = await this.getScriptIdForPath(targetPath, 2000);
@@ -701,7 +708,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       const baseCol0 = Math.max(0, targetColumn - 1);
       // Walk the configured fallback windows: each retry widens the search so
       // a slightly off column still resolves to the nearest valid statement.
-      let chosen: Protocol.Debugger.BreakLocation | undefined;
+      let chosen: { location: Protocol.Debugger.BreakLocation; moved: boolean } | undefined;
 
       for (const [startDelta, endDelta] of BREAKPOINT_SEARCH_WINDOWS) {
         chosen = await this.findBreakpointLocationInRange(scriptId, baseLine0, baseCol0, startDelta, endDelta);
@@ -711,14 +718,14 @@ export class NodeJSDebugAdapter extends DebugSession {
       if (!chosen) return null;
 
       this.diagnostic(
-        `getPossibleBreakpoints picked ${targetPath}:${chosen.lineNumber + 1}:${
-          (chosen.columnNumber ?? 0) + 1
-        }\n`,
+        `getPossibleBreakpoints picked ${targetPath}:${chosen.location.lineNumber + 1}:${
+          (chosen.location.columnNumber ?? 0) + 1
+        }${chosen.moved ? ' (moved to nearest available statement)' : ''}\n`,
       );
 
       const setResp = await this.cdpTransport.sendCommand<Protocol.Debugger.SetBreakpointResponse>(
         "Debugger.setBreakpoint",
-        { location: chosen, condition: breakpointCondition },
+        { location: chosen.location, condition: breakpointCondition },
       );
 
       return {
@@ -727,7 +734,8 @@ export class NodeJSDebugAdapter extends DebugSession {
           locations: [setResp.actualLocation],
         },
         line: setResp.actualLocation.lineNumber + 1,
-        column: (setResp.actualLocation.columnNumber ?? chosen.columnNumber ?? 0) + 1,
+        column: (setResp.actualLocation.columnNumber ?? chosen.location.columnNumber ?? 0) + 1,
+        ...(chosen.moved ? { reason: 'moved to nearest available statement' } : {}),
       };
     } catch {
       // Caller will fall through to URL-based placement.
@@ -802,7 +810,10 @@ export class NodeJSDebugAdapter extends DebugSession {
     const scriptIdResult = await this.placeBreakpointByScriptId(targetPath, targetLine, targetColumn, breakpointCondition);
 
     if (scriptIdResult) {
-      return { cdpResult: scriptIdResult.cdpResult };
+      return {
+        cdpResult: scriptIdResult.cdpResult,
+        ...(scriptIdResult.reason !== undefined ? { reason: scriptIdResult.reason } : {}),
+      };
     }
 
     const urlResult = await this.placeBreakpointByUrl(targetPath, targetLine, targetColumn, breakpointCondition);
@@ -850,11 +861,12 @@ export class NodeJSDebugAdapter extends DebugSession {
         path,
       },
       id: dapId,
-      // When the breakpoint failed to bind, surface the reason in DAP
-      // Breakpoint.message so DAP clients (and the MCP setBreakpoints tool
-      // response) can show the user *why* their breakpoint is greyed out
-      // instead of just `verified: false`.
-      ...(!verified && placement.reason !== undefined ? { message: placement.reason } : {}),
+      // Surface placement context in DAP Breakpoint.message so DAP clients
+      // (and the MCP setBreakpoints tool response) can show the user *why*
+      // their breakpoint was greyed out (verified=false) or *why* the actual
+      // line drifted from the requested one (e.g. "moved to nearest available
+      // statement" when V8 had no statement at the requested column).
+      ...(placement.reason !== undefined ? { message: placement.reason } : {}),
     });
 
     return { runtimeBp, actualBp };
@@ -1558,9 +1570,14 @@ export class NodeJSDebugAdapter extends DebugSession {
   // Method to simulate logpoint hit - would be called from DAP runtime events
   public simulateLogpointHit(filePath: string, line: number, variables: Record<string, unknown>): void {
     const breakpoints = this.breakpoints.get(filePath) ?? [];
-    const logpoint = breakpoints.find((bp) => bp.line === line && bp.logMessage);
+    // Use filter, not find — DAP allows multiple logpoints on the same line
+    // (different messages / conditions). Emitting only the first hit would
+    // silently drop the others.
+    const logpoints = breakpoints.filter((bp) => bp.line === line && bp.logMessage);
 
-    if (logpoint?.logMessage) {
+    for (const logpoint of logpoints) {
+      if (!logpoint.logMessage) continue;
+
       // Mirror the runtime path: extract the same placeholders, resolve them
       // against the provided static variables map, then render the message via
       // the shared helper so this path stays observationally consistent.
@@ -1574,7 +1591,6 @@ export class NodeJSDebugAdapter extends DebugSession {
       const message = renderLogpointMessage(logpoint.logMessage, vars);
       const payload = { message, vars, time: Date.now() };
 
-      // Emit custom event like runtime binding path
       this.sendEvent(new DAEvent('mcpLogpoint', {
         executionContextId: 0,
         name: '__mcpLogPoint',
