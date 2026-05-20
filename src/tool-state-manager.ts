@@ -37,7 +37,6 @@ const TOOL_RULES: Record<string, ToolRule> = {
   'next': { requiresConnection: true, requiresPause: true },
   'stepIn': { requiresConnection: true, requiresPause: true },
   'stepOut': { requiresConnection: true, requiresPause: true },
-  'goto': { requiresConnection: true, requiresPause: true },
   'restartFrame': { requiresConnection: true, requiresPause: true },
 
   // Variable inspection - require connection

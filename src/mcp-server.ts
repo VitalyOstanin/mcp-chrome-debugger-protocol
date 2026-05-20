@@ -745,19 +745,12 @@ export class NodeDebuggerMCPServer {
         this.runGatedTool("breakpointLocations", () => this.debuggerManager.breakpointLocations(source, line, column, endLine, endColumn)),
     );
 
-    this.server.registerTool(
-      "goto",
-      {
-        title: "Go To Target",
-        description: "Jump to a specific line or target (DAP standard)",
-        inputSchema: {
-          threadId: idSchema.describe("Thread ID to perform goto on"),
-          targetId: idSchema.describe("Target ID to jump to"),
-        },
-      },
-      async ({ threadId, targetId }) =>
-        this.runGatedTool("goto", () => this.debuggerManager.goto(threadId, targetId)),
-    );
+    // The DAP `goto` request is intentionally not registered: the Node.js
+    // inspector / V8 has no primitive jump operation, so the underlying
+    // adapter unconditionally throws (see nodejs-debug-adapter.ts goto).
+    // Exposing a tool that always errors only pollutes tools/list. The DAP
+    // handler stays in place so external DAP clients still get a proper
+    // "not supported" response on this request.
 
     this.server.registerTool(
       "restartFrame",
