@@ -99,19 +99,21 @@ export class DAPDebuggerManager {
       return value;
     };
     const result = truncateValue(data, 0);
-    // Final length check. Cache the serialised forms so the fallback branch does not
-    // re-serialise twice (originalSize + preview); previously evaluate / stackTrace /
-    // variables paid up to 3x JSON.stringify on large payloads.
-    const jsonString = JSON.stringify(result, null, 2);
+    // Match the wire-format exactly when measuring the payload size:
+    // createSuccessResponse / createErrorResponse both call JSON.stringify
+    // without indentation, so comparing against an indented form (the previous
+    // `null, 2`) overshot the real size by up to ~30% on nested objects and
+    // tripped the truncation fallback for payloads that would have fit. Drop
+    // the indent here and only pay the second stringify (for originalSize) on
+    // the unhappy path -- happy path now does a single JSON.stringify(result).
+    const jsonString = JSON.stringify(result);
 
     if (jsonString.length > maxLength) {
-      const originalJson = JSON.stringify(data, null, 2);
-
       return {
         result: {
           error: 'Response too large',
           preview: `${jsonString.substring(0, previewBudget)}...`,
-          originalSize: originalJson.length,
+          originalSize: JSON.stringify(data).length,
           truncatedSize: jsonString.length,
         },
         truncated: true,
