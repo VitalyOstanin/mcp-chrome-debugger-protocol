@@ -62,15 +62,17 @@ async function main() {
       const attach = await client.callTool({ name: 'attach', arguments: {} });
       console.log('\nattach:', attach.content?.[0]?.text ?? 'ok');
 
-      // Helper to trigger /test1
+      // Helper to trigger /test1 via Node's built-in fetch (Node 22+).
+      // The previous implementation spawned `bash -lc "curl ..."` -- an extra
+      // shell hop with no benefit, and a templated shell command we'd rather
+      // not keep around even though the port is hardcoded.
       async function triggerTest1() {
         console.log('\nTriggering /test1 to hit logpoint...');
         const ports = [3000, 3001, 3002, 3003, 3004];
         for (const p of ports) {
           try {
-            const curl = spawn('bash', ['-lc', `curl -sSf http://localhost:${p}/test1 >/dev/null`]);
-            const code = await new Promise((res) => curl.on('exit', res));
-            if (code === 0) return true;
+            const res = await fetch(`http://localhost:${p}/test1`);
+            if (res.ok) return true;
           } catch {}
         }
         return false;

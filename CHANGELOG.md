@@ -45,6 +45,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ### Security
 - Bumped `ws` to `^8.20.1` (GHSA-58qx-3vcg-4xpx).
+- Pinned transitive `hono` to `^4.12.21` via `overrides` (closes GHSA-qp7p-654g-cw7p CSS Declaration Injection, GHSA-hm8q-7f3q-5f36 JWT NumericDate validation, GHSA-p77w-8qqv-26rm `Vary` cache leakage). Comes in via `@modelcontextprotocol/sdk`.
+- Pinned transitive `brace-expansion` to `^5.0.6` via `overrides` (GHSA-jxxr-4gwj-5jf2: large numeric range defeats documented `max` DoS protection). Comes in via `eslint` → `minimatch`.
+- `scripts/mcp-logpoint-check.mjs` now uses Node's built-in `fetch` instead of `spawn('bash', ['-lc', 'curl ...'])`. The previous form shelled out via login bash for a hardcoded URL — replacing it removes an unnecessary shell-injection surface and one external binary dependency.
+- Audited `buildLogpointExpression` escaping after the 1.5.0 fix: order `\\` → `` ` `` → `$` → `{placeholder}` still protects the synthesised template literal from breakout via user-supplied logpoint messages. (Remaining RCE through placeholder expressions themselves is by design — documented under "Threat model" in [docs/SECURITY.md](docs/SECURITY.md).)
 
 ### CI
 - Annotated git tags + GitHub Releases via `gh release create` from the publish workflow; restored missing `v1.2.0` tag.
