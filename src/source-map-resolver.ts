@@ -1,6 +1,6 @@
 import { TraceMap, originalPositionFor, generatedPositionFor, LEAST_UPPER_BOUND } from "@jridgewell/trace-mapping";
 import { readFile, stat, readdir, access } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import { findProjectRoot, errorMessage } from "./utils.js";
 import { BUILD_DIRS, SOURCE_DIR_MARKER } from "./constants.js";
 
@@ -226,7 +226,12 @@ export class SourceMapResolver {
 
     if (!baseName) return [];
 
-    const mapName = baseName.replace(/\.ts$/, '.js.map');
+    // Strip *any* TS/JS source extension before composing the map name. The
+    // previous `.ts -> .js.map` rule worked for TypeScript-only projects but
+    // ignored .tsx/.mts/.cts authored sources, and also missed pre-compiled
+    // .js inputs (esbuild/swc keeping the .js extension), so the sibling-map
+    // fast path silently degraded to the full build-dir scan for those.
+    const mapName = `${baseName.replace(/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/, '')}.js.map`;
     const candidates = BUILD_DIRS.map(dir => join(baseRoot, dir, mapName));
     const existsFlags = await Promise.all(candidates.map(c => pathExists(c)));
 
@@ -235,11 +240,25 @@ export class SourceMapResolver {
 
   /**
    * Heuristic for paths that may have a corresponding source map.
-   * Restricted to authored TypeScript files; the previous includes('src/') check matched any
-   * compiled JavaScript whose absolute path happened to contain 'src/' (e.g. node_modules).
+   *
+   * - Authored TypeScript (`.ts/.tsx/.mts/.cts`) is always considered original
+   *   because that is the canonical input shape for this server.
+   * - Plain JavaScript (`.js/.jsx/.mjs/.cjs`) is considered original only when
+   *   either (a) the path sits under SOURCE_DIR_MARKER (looks like authored
+   *   source kept in `/src/...`) or (b) an adjacent `<file>.map` exists. Both
+   *   gates are cheap and prevent every plain-JS breakpoint placement from
+   *   kicking off a project-wide source-map discovery scan when the file has
+   *   no source map at all (the common case for runtime/node_modules JS).
    */
-  private looksLikeOriginalSource(filePath: string): boolean {
-    return filePath.endsWith('.ts') || filePath.endsWith('.tsx') || filePath.endsWith('.mts') || filePath.endsWith('.cts');
+  private async looksLikeOriginalSource(filePath: string): Promise<boolean> {
+    if (/\.(ts|tsx|mts|cts)$/.test(filePath)) return true;
+    if (!/\.(js|jsx|mjs|cjs)$/.test(filePath)) return false;
+
+    const normalised = filePath.replace(/\\/g, '/');
+
+    if (normalised.includes(SOURCE_DIR_MARKER)) return true;
+
+    return pathExists(`${filePath}.map`);
   }
 
   /**
@@ -258,7 +277,7 @@ export class SourceMapResolver {
     let targetColumnNumber = columnNumber;
     let sourceMapInfo: { success: boolean; sourceMapUsed?: string; matchedSource?: string } = { success: false };
 
-    if (this.looksLikeOriginalSource(filePath)) {
+    if (await this.looksLikeOriginalSource(filePath)) {
       try {
         // Extract relative path for source map resolution
         const srcMarkerIdx = filePath.lastIndexOf(SOURCE_DIR_MARKER);
@@ -271,7 +290,12 @@ export class SourceMapResolver {
         let resolved: { sourceMapUsed: string; line: number; column: number; matchedSource: string } | null = null;
 
         if (siblings.length > 0) {
-          const siblingResult = await this.resolveGeneratedPosition(relativePath, lineNumber, columnNumber, siblings);
+          // Pass the absolute filePath so matchSource can require an exact
+          // suffix match — in monorepos with several maps containing the same
+          // basename (e.g. `index.ts` in multiple packages) the basename-only
+          // heuristic would otherwise pick a wrong sibling deterministically
+          // by readdir order.
+          const siblingResult = await this.resolveGeneratedPosition(relativePath, lineNumber, columnNumber, siblings, filePath);
           const siblingData = JSON.parse(siblingResult.content[0]!.text);
 
           if (siblingData.success) {
@@ -294,7 +318,7 @@ export class SourceMapResolver {
             }
           }
 
-          const resolveResult = await this.resolveGeneratedPosition(relativePath, lineNumber, columnNumber, sourceMapPaths);
+          const resolveResult = await this.resolveGeneratedPosition(relativePath, lineNumber, columnNumber, sourceMapPaths, filePath);
           const resolveData = JSON.parse(resolveResult.content[0]!.text);
 
           if (resolveData.success) {
@@ -360,7 +384,7 @@ export class SourceMapResolver {
           sources: cached.traceMap.sources.filter((source): source is string => Boolean(source)),
         });
 
-        const matchedSource = this.matchSource(cached, originalSource);
+        const matchedSource = this.matchSource(cached, mapFile, originalSource, originalSourcePath);
 
         if (matchedSource) {
           // Convert MCP/DAP coordinates (1-based lines, 1-based columns) to trace-mapping coordinates
@@ -511,25 +535,46 @@ export class SourceMapResolver {
 
   // Match using basename lookup first (cheap), then fall back to suffix matching only on
   // entries from that bucket. Avoids scanning the full sources[] of large bundles.
-  private matchSource(cached: CachedTraceMap, originalSource: string): string | undefined {
+  //
+  // When `originalSourcePath` is provided, the candidate is additionally
+  // required to resolve to that exact absolute path (relative to the map's
+  // own directory). This is what disambiguates a monorepo where the same
+  // basename appears in multiple packages -- without it, the basename
+  // heuristic would non-deterministically pick whichever map walked first.
+  private matchSource(
+    cached: CachedTraceMap,
+    mapFile: string,
+    originalSource: string,
+    originalSourcePath?: string,
+  ): string | undefined {
     const normalizedOriginal = originalSource.replace(/\\/g, '/');
     const originalBaseName = normalizedOriginal.split('/').pop() ?? '';
 
     if (!originalBaseName) return undefined;
 
     const candidates = cached.sourcesByBasename.get(originalBaseName) ?? [];
+    const mapDir = dirname(mapFile);
+    const normalizedAbsTarget = originalSourcePath
+      ? resolvePath(originalSourcePath).replace(/\\/g, '/')
+      : undefined;
 
     for (const candidate of candidates) {
       const normalizedCandidate = candidate.replace(/^(\.\.\/)+/, '').replace(/\\/g, '/');
-
-      if (
+      const basenameMatch =
         normalizedCandidate.endsWith(normalizedOriginal) ||
         normalizedOriginal.endsWith(normalizedCandidate) ||
         normalizedCandidate === originalBaseName ||
-        normalizedCandidate.endsWith(`/${originalBaseName}`)
-      ) {
-        return candidate;
+        normalizedCandidate.endsWith(`/${originalBaseName}`);
+
+      if (!basenameMatch) continue;
+
+      if (normalizedAbsTarget !== undefined) {
+        const resolvedCandidate = resolvePath(mapDir, candidate).replace(/\\/g, '/');
+
+        if (resolvedCandidate !== normalizedAbsTarget) continue;
       }
+
+      return candidate;
     }
 
     return undefined;
