@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - Strict suffix-match in `SourceMapResolver.matchSource` when `originalSourcePath` is provided, preventing wrong sibling pick in monorepos with duplicate basenames.
 
 ### Fixed
+- Test fixtures parse `MCP_TEST_APP_PORT` through a strict helper that rejects malformed strings (`"8080garbage"`, mixed input, out-of-range values). Bad values now emit a warning and the fixture falls back to `port=0` / `get-port`, instead of silently passing whatever `parseInt` returned to `listen()`.
 - `RingBuffer.toArray` no longer relies on a non-null assertion; the invariant is enforced at read time so a corrupted internal state fails loudly instead of leaking `undefined` to callers ([src/dap-client.ts](src/dap-client.ts)).
 - `pollForInspectorPort` now guarantees a single probe round even when `discoverTimeoutMs<=0`. Previously a caller passing `0` got `undefined` without any probe being attempted ([src/dap-client.ts](src/dap-client.ts)).
 - `enrichAttachResult` no longer wraps an ErrorResponse (`success: false`) in `createSuccessResponse`; the failed envelope is preserved and diagnostic context (`activation`, `detectedPort`, `webSocketUrl`) is appended via `createErrorResponse` ([src/dap-client.ts](src/dap-client.ts)).

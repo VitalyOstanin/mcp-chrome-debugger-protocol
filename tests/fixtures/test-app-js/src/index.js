@@ -3,6 +3,28 @@
 import express from "express";
 import getPort from "get-port";
 
+// Parse an optional port from a string env var.
+// Accepts only clean non-negative integers in the TCP range [0, 65535].
+// Returns undefined for unset / blank / malformed / out-of-range input;
+// callers fall back to get-port's pool.
+function parseOptionalPort(raw) {
+  if (raw === undefined || raw === '') return undefined;
+  if (!/^\d+$/.test(raw)) {
+    console.warn(`MCP_TEST_APP_PORT='${raw}' is not a non-negative integer; falling back to get-port`);
+
+    return undefined;
+  }
+  const n = Number.parseInt(raw, 10);
+
+  if (n < 0 || n > 65535) {
+    console.warn(`MCP_TEST_APP_PORT=${n} is outside TCP port range 0..65535; falling back to get-port`);
+
+    return undefined;
+  }
+
+  return n;
+}
+
 class DataProcessor {
   constructor() {
     this.data = [];
@@ -125,10 +147,11 @@ async function main() {
     });
   });
 
-  // Get port from environment variable or use get-port to find available port
-  const { MCP_TEST_APP_PORT } = process.env;
-  const envPort = MCP_TEST_APP_PORT ? parseInt(MCP_TEST_APP_PORT, 10) : undefined;
-  const port = envPort && !isNaN(envPort) ? envPort : await getPort({ port: [3000, 3001, 3002, 3003, 3004] });
+  // MCP_TEST_APP_PORT is optional. When unset (or invalid) we fall back to
+  // get-port, which scans the configured pool for the first free port. The
+  // strict parser rejects "8080garbage" (legacy parseInt accepted it).
+  const envPort = parseOptionalPort(process.env.MCP_TEST_APP_PORT);
+  const port = envPort ?? await getPort({ port: [3000, 3001, 3002, 3003, 3004] });
 
   const server = app.listen(port, () => {
     console.log(`HTTP server listening on port ${port}`);
