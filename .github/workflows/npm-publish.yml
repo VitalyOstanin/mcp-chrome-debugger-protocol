@@ -69,8 +69,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      id-token: write
-      contents: read
+      id-token: write    # npm Trusted Publishing (OIDC) + provenance
+      contents: write    # Required for creating GitHub releases
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -83,3 +83,18 @@ jobs:
       - run: node --version && npm --version
       - run: npm ci
       - run: npm publish --provenance --access public
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create ${{ github.ref_name }} \
+            --title "Release ${{ github.ref_name }}" \
+            --notes "Release of @vitalyostanin/mcp-chrome-debugger-protocol ${{ github.ref_name }}.
+
+          Install:
+          \`\`\`bash
+          npm install @vitalyostanin/mcp-chrome-debugger-protocol@${{ github.ref_name }}
+          \`\`\`
+
+          See [CHANGELOG](https://github.com/VitalyOstanin/mcp-chrome-debugger-protocol/blob/${{ github.ref_name }}/CHANGELOG.md) for details."

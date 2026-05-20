@@ -95,14 +95,9 @@ claude mcp remove chrome-debugger-protocol --scope user
 
 Run this server only in a trusted local environment (developer workstation, IDE, CI sandbox owned by you). It is **not** designed to sit behind a public proxy or be shared between mutually-distrusting clients.
 
-What an MCP client can do once connected:
-- `evaluate`, `setBreakpoints` with `condition`, and logpoint `{expr}` placeholders run arbitrary JavaScript in the debuggee process. Anyone who can talk to this server is effectively root inside the target Node.js process.
-- `attach` can request a connection by hostname. By default the server refuses non-loopback hosts; set `MCP_CDP_ALLOW_REMOTE=1` only when you control both ends and have a reason to.
-- Logpoint hits are buffered (up to 10,000 entries) and returned on demand. Avoid placing logpoints whose `{expr}` references secrets/PII in a long-lived debug session -- a later `getLogpointHits` will still see them until the buffer is cleared or the entries are evicted FIFO.
+A connected MCP client is effectively root inside the target Node.js process: `evaluate`, `setBreakpoints` with `condition`, and logpoint `{expr}` placeholders all execute arbitrary JavaScript in the debuggee by design. `attach` refuses non-loopback hosts unless `MCP_CDP_ALLOW_REMOTE=1` is set. Logpoint hits are buffered (FIFO, up to 10 000 entries) and returned on demand — avoid logpoints over secrets/PII.
 
-Operational guidance:
-- `node --inspect` binds the inspector to `127.0.0.1` by default (since Node 7+). Never run it as `--inspect=0.0.0.0` on a multi-tenant or network-exposed host: the V8 inspector exposes `Runtime.evaluate`, which is unauthenticated arbitrary code execution against the debuggee.
-- The MCP server attaches over WebSocket to `localhost`. To debug a remote process, tunnel via SSH (`ssh -L 9229:127.0.0.1:9229 host`) instead of opening port 9229 to the network.
+See [docs/SECURITY.md](docs/SECURITY.md) for the full threat model, trust boundaries, mitigations, operational guidance, and the vulnerability reporting process.
 
 ## Quick Start
 
