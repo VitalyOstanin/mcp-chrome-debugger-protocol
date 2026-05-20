@@ -16,6 +16,15 @@ const lineNumberSchema = z.number().int().min(1).describe("Line number (1-based)
 const columnNumberSchema = z.number().int().min(1).describe("Column number (1-based)");
 const portSchema = z.number().int().min(1).max(65535);
 const idSchema = z.number().int().min(1);
+// Truncation options shared by evaluate / stackTrace / variables tools.
+// Spread into each tool's inputSchema so a change here propagates to all three.
+const truncationOptionsSchema = {
+  maxLength: z.number().int().min(100).optional().describe("Maximum response length in characters (default: 20000, min: 100)"),
+  maxDepth: z.number().int().min(0).optional().describe("Maximum object depth (default: 10)"),
+  maxArrayItems: z.number().int().min(1).optional().describe("Maximum array items to show (default: 50, min: 1)"),
+  maxObjectKeys: z.number().int().min(0).optional().describe("Maximum object keys to show (default: 50)"),
+  summary: z.boolean().optional().describe("Return summary mode (types only, default: false)"),
+} as const;
 
 interface PackageManifest {
   name: string;
@@ -449,11 +458,7 @@ export class NodeDebuggerMCPServer {
           expression: z.string().describe("JavaScript expression to evaluate"),
           frameId: z.number().int().min(0).optional().describe("Stack frame ID for context (optional)"),
           context: z.enum(['watch', 'repl', 'hover']).optional().describe("Context for the evaluation (optional)"),
-          maxLength: z.number().int().min(100).optional().describe("Maximum response length in characters (default: 20000, min: 100)"),
-          maxDepth: z.number().int().min(0).optional().describe("Maximum object depth (default: 10)"),
-          maxArrayItems: z.number().int().min(1).optional().describe("Maximum array items to show (default: 50, min: 1)"),
-          maxObjectKeys: z.number().int().min(0).optional().describe("Maximum object keys to show (default: 50)"),
-          summary: z.boolean().optional().describe("Return summary mode (types only, default: false)"),
+          ...truncationOptionsSchema,
         },
       },
       async ({ expression, frameId, maxLength, maxDepth, maxArrayItems, maxObjectKeys, summary }) => {
@@ -472,11 +477,7 @@ export class NodeDebuggerMCPServer {
           threadId: idSchema.optional().describe("Thread ID to get stack for (optional)"),
           startFrame: z.number().int().min(0).optional().describe("Start frame index (default: 0)"),
           levels: z.number().int().min(0).optional().describe("Number of frames to return (default: all)"),
-          maxLength: z.number().int().min(100).optional().describe("Maximum response length in characters (default: 20000, min: 100)"),
-          maxDepth: z.number().int().min(0).optional().describe("Maximum object depth (default: 10)"),
-          maxArrayItems: z.number().int().min(1).optional().describe("Maximum array items to show (default: 50, min: 1)"),
-          maxObjectKeys: z.number().int().min(0).optional().describe("Maximum object keys to show (default: 50)"),
-          summary: z.boolean().optional().describe("Return summary mode (types only, default: false)"),
+          ...truncationOptionsSchema,
         },
       },
       async ({ threadId, startFrame, levels, maxLength, maxDepth, maxArrayItems, maxObjectKeys, summary }) => {
@@ -496,11 +497,7 @@ export class NodeDebuggerMCPServer {
           filter: z.enum(['indexed', 'named']).optional().describe("Filter for variable types (optional)"),
           start: z.number().int().min(0).optional().describe("Start index for indexed variables (optional)"),
           count: z.number().int().min(0).optional().describe("Number of variables to return (optional)"),
-          maxLength: z.number().int().min(100).optional().describe("Maximum response length in characters (default: 20000, min: 100)"),
-          maxDepth: z.number().int().min(0).optional().describe("Maximum object depth (default: 10)"),
-          maxArrayItems: z.number().int().min(1).optional().describe("Maximum array items to show (default: 50, min: 1)"),
-          maxObjectKeys: z.number().int().min(0).optional().describe("Maximum object keys to show (default: 50)"),
-          summary: z.boolean().optional().describe("Return summary mode (types only, default: false)"),
+          ...truncationOptionsSchema,
         },
       },
       async ({ variablesReference, filter, start, count, maxLength, maxDepth, maxArrayItems, maxObjectKeys, summary }) => {

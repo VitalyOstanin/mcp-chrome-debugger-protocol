@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { setTimeout } from 'node:timers/promises';
 import type ProtocolMappingApi from 'devtools-protocol/types/protocol-mapping';
 import { DEFAULTS } from './constants.js';
+import { errorMessage } from './utils.js';
 
 export interface CDPTransportOptions {
   host?: string | undefined;
@@ -139,7 +140,7 @@ export class CDPTransport extends EventEmitter {
           await (this.client[enableMethod] as () => Promise<void>)();
         }
       } catch (error) {
-        this.emit('error', new Error(`Failed to enable domain ${domain}: ${error instanceof Error ? error.message : String(error)}`));
+        this.emit('error', new Error(`Failed to enable domain ${domain}: ${errorMessage(error)}`));
         throw error;
       }
     }

@@ -27,6 +27,8 @@ import {
   DEFAULTS,
   END_COLUMN_LARGE,
 } from './constants.js';
+import { errorMessage } from './utils.js';
+import { isVerbose } from './logger.js';
 
 // The @vscode/debugadapter Breakpoint class does not publish source/id in its
 // public type, but DebugProtocol.Breakpoint requires them. Centralise the cast
@@ -96,10 +98,9 @@ export class NodeJSDebugAdapter extends DebugSession {
   // breakpoint placement that didn't match the exact URL.
   private readonly scriptsByBasename = new Map<string, Set<string>>();
   private readonly scriptsById = new Map<string, Protocol.Debugger.ScriptParsedEvent>();
-  private readonly verboseDiagnostics = process.env.DAP_VERBOSE === '1' || process.env.DAP_VERBOSE === 'true';
 
   private diagnostic(message: string): void {
-    if (!this.verboseDiagnostics) return;
+    if (!isVerbose()) return;
     this.sendEvent(new OutputEvent(message, "console"));
   }
 
@@ -288,7 +289,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       this.sendErrorResponse(
         response,
         1002,
-        `Launch failed: ${error instanceof Error ? error.message : String(error)}`,
+        `Launch failed: ${errorMessage(error)}`,
       );
     }
   }
@@ -304,7 +305,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       this.sendErrorResponse(
         response,
         1003,
-        `Attach failed: ${error instanceof Error ? error.message : String(error)}`,
+        `Attach failed: ${errorMessage(error)}`,
       );
     }
   }
@@ -317,10 +318,10 @@ export class NodeJSDebugAdapter extends DebugSession {
       return { success: true, message: "attached" };
     } catch (error) {
       this.sendEvent(
-        new OutputEvent(`Attach failed: ${error instanceof Error ? error.message : String(error)}\n`, "stderr"),
+        new OutputEvent(`Attach failed: ${errorMessage(error)}\n`, "stderr"),
       );
 
-      return { success: false, message: error instanceof Error ? error.message : String(error) };
+      return { success: false, message: errorMessage(error) };
     }
   }
 
@@ -351,7 +352,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       this.sendEvent(
         new OutputEvent(
           `Failed to install Runtime.addBinding for logpoints: ${
-            error instanceof Error ? error.message : String(error)
+            errorMessage(error)
           }\n`,
           "console",
         ),
@@ -428,7 +429,7 @@ export class NodeJSDebugAdapter extends DebugSession {
               // Indexing the plain-path alias is best-effort: the file:// URL
               // form is already indexed above, so a malformed plain path only
               // costs us the cheap basename-lookup shortcut.
-              this.diagnostic(`indexScriptUrl(plain) failed for ${params.url}: ${error instanceof Error ? error.message : String(error)}`);
+              this.diagnostic(`indexScriptUrl(plain) failed for ${params.url}: ${errorMessage(error)}`);
             }
           }
         }
@@ -449,7 +450,7 @@ export class NodeJSDebugAdapter extends DebugSession {
           // addBinding can race a context being torn down before we install
           // the binding; fall through silently. New contexts retry on their
           // own executionContextCreated event.
-          this.diagnostic(`Runtime.addBinding for new context failed: ${error instanceof Error ? error.message : String(error)}`);
+          this.diagnostic(`Runtime.addBinding for new context failed: ${errorMessage(error)}`);
         }
         break;
       }
@@ -487,7 +488,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         } catch (error) {
           // Surface in DAP_VERBOSE so a misshapen binding payload from the
           // logpoint expression does not silently disappear.
-          this.diagnostic(`bindingCalled forward failed: ${error instanceof Error ? error.message : String(error)}`);
+          this.diagnostic(`bindingCalled forward failed: ${errorMessage(error)}`);
         }
         break;
       }
@@ -622,7 +623,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     } catch (error) {
       this.diagnostic(
         `Source map resolution failed for ${path}:${line}: ${
-          error instanceof Error ? error.message : String(error)
+          errorMessage(error)
         }\n`,
       );
     }
@@ -757,7 +758,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       // Exact-URL placement can fail when V8 normalises the script URL
       // differently (case, symlinks, percent-encoding). Fall through to a
       // urlRegex match before giving up.
-      this.diagnostic(`setBreakpointByUrl exact-url failed: ${error instanceof Error ? error.message : String(error)}; retrying via urlRegex`);
+      this.diagnostic(`setBreakpointByUrl exact-url failed: ${errorMessage(error)}; retrying via urlRegex`);
 
       const escapedPath = targetPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const cdpResult = await this.cdpTransport.sendCommand<Protocol.Debugger.SetBreakpointByUrlResponse>(
@@ -884,7 +885,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         } catch (error) {
           this.diagnostic(
             `Failed to set breakpoint at ${path}:${line}: ${
-              error instanceof Error ? error.message : String(error)
+              errorMessage(error)
             }\n`,
           );
         }
@@ -910,7 +911,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       this.sendErrorResponse(
         response,
         1004,
-        `Set breakpoints failed: ${error instanceof Error ? error.message : String(error)}`,
+        `Set breakpoints failed: ${errorMessage(error)}`,
       );
     }
   }
@@ -950,7 +951,7 @@ export class NodeJSDebugAdapter extends DebugSession {
           });
         } catch (error) {
           this.diagnostic(
-            `Failed to remove breakpoint ${bp.id}: ${error instanceof Error ? error.message : String(error)}\n`,
+            `Failed to remove breakpoint ${bp.id}: ${errorMessage(error)}\n`,
           );
         }
       }
@@ -977,7 +978,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         }
       } catch (error) {
         this.diagnostic(
-          `Failed to remove breakpoint ${bp.id}: ${error instanceof Error ? error.message : String(error)}\n`,
+          `Failed to remove breakpoint ${bp.id}: ${errorMessage(error)}\n`,
         );
       }
     }
@@ -998,24 +999,32 @@ export class NodeJSDebugAdapter extends DebugSession {
   // evaluate, stackTrace, scopes, variables, threads, ...) so we never depend on the DebugSession
   // protected handler chain for those operations.
 
+  private async runCdpExecutionCommand(
+    cdpMethod: string,
+    response: DebugProtocol.Response,
+    errorCode: number,
+    label: string,
+    prepareBody?: () => void,
+  ): Promise<void> {
+    try {
+      if (this.cdpTransport) {
+        await this.cdpTransport.sendCommand(cdpMethod);
+      }
+      prepareBody?.();
+      this.sendResponse(response);
+    } catch (error) {
+      this.sendErrorResponse(response, errorCode, `${label} failed: ${errorMessage(error)}`);
+    }
+  }
+
   protected override async continueRequest(
     response: DebugProtocol.ContinueResponse,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _args: DebugProtocol.ContinueArguments,
   ): Promise<void> {
-    try {
-      if (this.cdpTransport) {
-        await this.cdpTransport.sendCommand("Debugger.resume");
-      }
+    await this.runCdpExecutionCommand("Debugger.resume", response, 1005, "Continue", () => {
       response.body = { allThreadsContinued: true };
-      this.sendResponse(response);
-    } catch (error) {
-      this.sendErrorResponse(
-        response,
-        1005,
-        `Continue failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    });
   }
 
   protected override async pauseRequest(
@@ -1023,14 +1032,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _args: DebugProtocol.PauseArguments,
   ): Promise<void> {
-    try {
-      if (this.cdpTransport) {
-        await this.cdpTransport.sendCommand("Debugger.pause");
-      }
-      this.sendResponse(response);
-    } catch (error) {
-      this.sendErrorResponse(response, 1006, `Pause failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    await this.runCdpExecutionCommand("Debugger.pause", response, 1006, "Pause");
   }
 
   protected override async stepInRequest(
@@ -1038,18 +1040,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _args: DebugProtocol.StepInArguments,
   ): Promise<void> {
-    try {
-      if (this.cdpTransport) {
-        await this.cdpTransport.sendCommand("Debugger.stepInto");
-      }
-      this.sendResponse(response);
-    } catch (error) {
-      this.sendErrorResponse(
-        response,
-        1007,
-        `Step into failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    await this.runCdpExecutionCommand("Debugger.stepInto", response, 1007, "Step into");
   }
 
   protected override async stepOutRequest(
@@ -1057,18 +1048,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _args: DebugProtocol.StepOutArguments,
   ): Promise<void> {
-    try {
-      if (this.cdpTransport) {
-        await this.cdpTransport.sendCommand("Debugger.stepOut");
-      }
-      this.sendResponse(response);
-    } catch (error) {
-      this.sendErrorResponse(
-        response,
-        1008,
-        `Step out failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    await this.runCdpExecutionCommand("Debugger.stepOut", response, 1008, "Step out");
   }
 
   protected override async nextRequest(
@@ -1076,18 +1056,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _args: DebugProtocol.NextArguments,
   ): Promise<void> {
-    try {
-      if (this.cdpTransport) {
-        await this.cdpTransport.sendCommand("Debugger.stepOver");
-      }
-      this.sendResponse(response);
-    } catch (error) {
-      this.sendErrorResponse(
-        response,
-        1009,
-        `Step over failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    await this.runCdpExecutionCommand("Debugger.stepOver", response, 1009, "Step over");
   }
 
   protected override configurationDoneRequest(

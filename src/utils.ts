@@ -2,6 +2,7 @@
 import { setTimeout } from "node:timers/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import safeStringify from "safe-stable-stringify";
 
 /**
  * Wire-format envelope for every MCP tool response. The single `text` chunk
@@ -40,6 +41,19 @@ export interface SuccessResponse<T = unknown> {
 
 /** Discriminated union of the two ToolResponse shapes — switch on `success`. */
 export type ToolResponse<T = unknown> = SuccessResponse<T> | ErrorResponse;
+
+/**
+ * Extract a human-readable text from a thrown / rejected value. Centralises the
+ * `error instanceof Error ? error.message : String(error)` idiom that was
+ * repeated 25+ times across the codebase, so a future change (e.g. handle
+ * AggregateError, redact PII) touches one place.
+ */
+export function errorMessage(cause: unknown): string {
+  if (cause instanceof Error) return cause.message;
+  if (typeof cause === 'string') return cause;
+
+  return safeStringify(cause) ?? String(cause);
+}
 
 /**
  * Build an MCPResponse wrapping an ErrorResponse JSON body. Used directly when
@@ -105,7 +119,7 @@ export async function withErrorHandling<T>(
   } catch (error) {
     return createErrorResponse(
       `Failed to ${context.operation}`,
-      error instanceof Error ? error.message : String(error),
+      errorMessage(error),
       'OPERATION_FAILED',
       context,
     );

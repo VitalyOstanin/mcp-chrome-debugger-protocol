@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { DebugProtocol } from '@vscode/debugprotocol';
 import { NodeJSDebugAdapter, type NodeJSLaunchRequestArguments, type NodeJSAttachRequestArguments } from './nodejs-debug-adapter.js';
 import type { LogpointHit, DebuggerEvent, TrackedBreakpoint } from './types.js';
-import { createSuccessResponse, createErrorResponse, type MCPResponse } from './utils.js';
+import { createSuccessResponse, createErrorResponse, errorMessage, type MCPResponse } from './utils.js';
 import { DEFAULTS, INSPECTOR_PORT_RANGE } from './constants.js';
 import { logVerbose } from './logger.js';
 import { kill } from 'node:process';
@@ -688,7 +688,7 @@ export class DAPClient extends EventEmitter {
     } catch (error) {
       return createErrorResponse(
         'Failed to enable debugger',
-        JSON.stringify({ pid, error: error instanceof Error ? error.message : String(error) }),
+        JSON.stringify({ pid, error: errorMessage(error) }),
       );
     }
   }
@@ -747,7 +747,7 @@ export class DAPClient extends EventEmitter {
     } catch (error) {
       return createErrorResponse(
         'Failed to attach to process',
-        JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
+        JSON.stringify({ error: errorMessage(error) }),
       );
     }
   }

@@ -1,7 +1,7 @@
 import { TraceMap, originalPositionFor, generatedPositionFor, LEAST_UPPER_BOUND } from "@jridgewell/trace-mapping";
 import { readFile, stat, readdir, access } from "node:fs/promises";
 import { join } from "node:path";
-import { findProjectRoot } from "./utils.js";
+import { findProjectRoot, errorMessage } from "./utils.js";
 import { BUILD_DIRS, SOURCE_DIR_MARKER } from "./constants.js";
 
 // Async existence check via fs.access — returns true on success, false on any
@@ -403,7 +403,7 @@ export class SourceMapResolver {
       return srMapTextResponse({
         success: false,
         error: "Failed to resolve generated position",
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
       });
     }
   }
@@ -462,7 +462,7 @@ export class SourceMapResolver {
       return srMapTextResponse({
         success: false,
         error: "Failed to resolve original position",
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
       });
     }
   }

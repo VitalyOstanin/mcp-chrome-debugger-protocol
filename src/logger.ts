@@ -3,23 +3,14 @@
 // single gate. This is intentionally tiny: structured logging belongs to the
 // MCP client and to OutputEvent over DAP, not to a local file.
 
+import { errorMessage } from "./utils.js";
+
 const verboseEnabled = process.env.DAP_VERBOSE === '1' || process.env.DAP_VERBOSE === 'true';
 
-/**
- * Format a `cause` value next to a contextual message. Distinguishes Error
- * (carries .message), already-stringly-typed payloads, and arbitrary objects
- * (JSON-stringify with a fallback for circular structures).
- */
 function formatCause(cause: unknown): string {
   if (cause === undefined || cause === null) return '';
-  if (cause instanceof Error) return `: ${cause.message}`;
-  if (typeof cause === 'string') return `: ${cause}`;
 
-  try {
-    return `: ${JSON.stringify(cause)}`;
-  } catch {
-    return `: ${String(cause)}`;
-  }
+  return `: ${errorMessage(cause)}`;
 }
 
 /**
