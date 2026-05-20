@@ -1,15 +1,14 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import safeStringify from "safe-stable-stringify";
 
 import { DAPClient } from "./dap-client.js";
 import { DAPDebuggerManager } from "./dap-debugger-manager.js";
 import { ToolStateManager } from "./tool-state-manager.js";
 import { DEFAULTS, INSPECTOR_PORT_RANGE } from "./constants.js";
 import { logError } from "./logger.js";
+import { packageManifest } from "./package-manifest.js";
 
 // Shared Zod schemas. Both lines and columns are 1-based on the MCP/DAP
 // boundary (see docs/coordinates.md).
@@ -27,27 +26,6 @@ const truncationOptionsSchema = {
   summary: z.boolean().optional().describe("Return summary mode (types only, default: false)"),
 } as const;
 
-interface PackageManifest {
-  name: string;
-  version: string;
-}
-
-const packageManifest: PackageManifest = (() => {
-  // Resolve from dist/index.js or dist/mcp-server.js up to the project root.
-  const here = dirname(fileURLToPath(import.meta.url));
-  const candidates = [join(here, '..', 'package.json'), join(here, '..', '..', 'package.json')];
-
-  for (const candidate of candidates) {
-    try {
-      return JSON.parse(readFileSync(candidate, 'utf-8')) as PackageManifest;
-    } catch {
-      // try next candidate
-    }
-  }
-
-  return { name: '@vitalyostanin/mcp-chrome-debugger-protocol', version: '0.0.0' };
-})();
-
 /**
  * Top-level MCP server: owns the @modelcontextprotocol/sdk `McpServer`,
  * registers every Chrome DevTools Protocol tool against the underlying
@@ -64,7 +42,6 @@ export class NodeDebuggerMCPServer {
   private readonly dapClient: DAPClient;
   private readonly debuggerManager: DAPDebuggerManager;
   private readonly toolStateManager: ToolStateManager;
-
 
   private fixContentTypes(result: { content?: Array<{ type: string; text: string; [key: string]: unknown }> }) {
     return {
@@ -594,14 +571,18 @@ export class NodeDebuggerMCPServer {
           content: [
             {
               type: "text",
-              text: JSON.stringify({
+              text: safeStringify({
                 connection: connectionInfo,
                 state: debugInfo,
                 toolsAvailability: {
                   enabled: debugInfo.enabledTools,
                   disabled: debugInfo.disabledTools,
                 },
-              }, null, 2),
+                // Swallowed CDP event-handler errors, per event type.
+                // Operators can spot silent regressions without enabling
+                // DAP_VERBOSE on a hot session.
+                eventErrorCounts: this.dapClient.getAdapterEventErrorCounts(),
+              }, undefined, 2) ?? '',
             },
           ],
         };
@@ -813,5 +794,27 @@ export class NodeDebuggerMCPServer {
     const transport = new StdioServerTransport();
 
     await this.server.connect(transport);
+  }
+
+  /**
+   * Graceful shutdown: disconnect the active CDP session (if any) and close
+   * the MCP transport so the SDK stops reading stdin. Safe to call multiple
+   * times: dapClient.disconnect() tolerates "already disconnected" and
+   * server.close() is idempotent.
+   */
+  async close(): Promise<void> {
+    try {
+      await this.dapClient.disconnect();
+    } catch (error) {
+      // Best-effort cleanup on shutdown: log but do not rethrow, so SIGTERM
+      // still completes the close path and the host can move on.
+      logError('Error during dapClient.disconnect on shutdown', error);
+    }
+
+    try {
+      await this.server.close();
+    } catch (error) {
+      logError('Error during McpServer.close on shutdown', error);
+    }
   }
 }

@@ -21,7 +21,7 @@
 - `npm run test:integration`: Run integration tests (`vitest.integration.config.ts`).
 - `npm run test:all`: Run unit and integration tests sequentially.
 - `npm run lint` / `npm run lint:fix`: Lint and auto-fix code style.
-- `npm run dev:test` / `npm run dev:test:ts`: Dev helper scripts for local testing.
+- `npm run dev:test`: Dev helper script that launches the test-app fixture under `--inspect=9229` for manual attach.
 
 ## Coding Style & Naming Conventions
 - Language: TypeScript (ES modules). Files use kebab-case (e.g., `dap-client.ts`).

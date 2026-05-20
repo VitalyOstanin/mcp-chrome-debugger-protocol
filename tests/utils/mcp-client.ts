@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import type { ChildProcess } from "child_process";
-import path from "path";
+import type { ChildProcess } from "node:child_process";
+import path from "node:path";
 import { spawnedProcesses } from "../setup";
 
 export interface MCPToolResult {

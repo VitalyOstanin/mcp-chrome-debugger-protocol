@@ -25,6 +25,17 @@ updates:
         patterns:
           - "vitest"
           - "@vitest/*"
+      # Bundle every non-major production-dep bump into a single weekly PR.
+      # Without this, each of @modelcontextprotocol/sdk, chrome-remote-interface,
+      # ws, zod, @vscode/debugadapter, @vscode/debugprotocol,
+      # @jridgewell/trace-mapping, safe-stable-stringify, get-port produced its
+      # own PR -- ~7+ PRs/week reviewing churn on the prod surface. Majors stay
+      # standalone (breaking changes warrant individual review).
+      production:
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
     commit-message:
       prefix: chore
       include: scope

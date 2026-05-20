@@ -29,8 +29,10 @@ import {
   DEFAULTS,
   END_COLUMN_LARGE,
 } from './constants.js';
-import { errorMessage } from './utils.js';
+import { errorMessage, mapWithConcurrency } from './utils.js';
+import { NotConnectedError, NotFoundError, ProtocolError, ValidationError } from './errors.js';
 import { isVerbose } from './logger.js';
+import safeStringify from 'safe-stable-stringify';
 
 // The @vscode/debugadapter Breakpoint class does not publish source/id in its
 // public type, but DebugProtocol.Breakpoint requires them. Centralise the cast
@@ -97,6 +99,12 @@ export class NodeJSDebugAdapter extends DebugSession {
   private nodeProcess: ChildProcess | null = null;
   private readonly breakpoints = new Map<string, NodeJSRuntimeBreakpoint[]>();
   private nextBreakpointId = 1;
+  // In-memory tally of swallowed errors per CDP event type. We diagnostic() the
+  // individual failures (visible only with DAP_VERBOSE=1), but the counter is
+  // exposed through getDebuggerState so operators can spot a silent regression
+  // -- e.g. a CDP payload format drift that newly breaks bindingCalled forward
+  // -- without first toggling verbose mode on a hot session.
+  private readonly eventErrorCounts = new Map<string, number>();
   // Synthetic CDP-style breakpoint id used when the runtime never replied.
   // Kept independent of nextBreakpointId so the DAP id and the synthetic CDP
   // id never collide on the same numeric value.
@@ -109,10 +117,28 @@ export class NodeJSDebugAdapter extends DebugSession {
   // breakpoint placement that didn't match the exact URL.
   private readonly scriptsByBasename = new Map<string, Set<string>>();
   private readonly scriptsById = new Map<string, Protocol.Debugger.ScriptParsedEvent>();
+  // Long-running debug sessions can see tens of thousands of Debugger.scriptParsed
+  // events (eval/vm code, dynamic imports). Cap the cache so memory stays bounded;
+  // eviction order is insertion (Map preserves it), which approximates LRU well
+  // enough for a cache only used for stackTrace/loadedSources lookups.
+  private static readonly MAX_SCRIPTS = 5000;
 
   private diagnostic(message: string): void {
     if (!isVerbose()) return;
     this.sendEvent(new OutputEvent(message, "console"));
+  }
+
+  private bumpEventErrorCount(eventType: string): void {
+    this.eventErrorCounts.set(eventType, (this.eventErrorCounts.get(eventType) ?? 0) + 1);
+  }
+
+  /**
+   * Snapshot of swallowed errors per CDP event handler. Exposed via
+   * getDebuggerState so operators can detect a silent regression without
+   * enabling DAP_VERBOSE on a hot session.
+   */
+  public getEventErrorCounts(): Record<string, number> {
+    return Object.fromEntries(this.eventErrorCounts);
   }
 
   // Build a successful DAP response shell with the canonical envelope. The
@@ -138,9 +164,12 @@ export class NodeJSDebugAdapter extends DebugSession {
   private nextVariableHandleId = 1;
   private lastException: Protocol.Runtime.ExceptionDetails | null = null;
   private nextExceptionId = 1;
-  private exceptionPauseState: 'none' | 'uncaught' | 'all' = 'none';
+  private exceptionPauseState: 'none' | 'caught' | 'uncaught' | 'all' = 'none';
 
-  private async getScriptIdForPath(targetPath: string, timeoutMs = 1000): Promise<string | undefined> {
+  private async getScriptIdForPath(
+    targetPath: string,
+    timeoutMs: number = DEFAULTS.SCRIPT_LOOKUP_DEFAULT_TIMEOUT_MS,
+  ): Promise<string | undefined> {
     const deadline = Date.now() + timeoutMs;
     // pathToFileURL handles platform quirks: on Windows it produces 'file:///C:/...'
     // (RFC 8089-compliant), where naive 'file://' + path prefix produces an
@@ -151,7 +180,7 @@ export class NodeJSDebugAdapter extends DebugSession {
 
     while (!scriptId && Date.now() < deadline) {
       // Small delay to allow scriptParsed events to arrive after Debugger.enable
-      await sleep(50);
+      await sleep(DEFAULTS.SCRIPT_LOOKUP_POLL_INTERVAL_MS);
       scriptId = tryGet();
     }
 
@@ -193,6 +222,45 @@ export class NodeJSDebugAdapter extends DebugSession {
 
     bucket.add(url);
     this.scriptsByBasename.set(basename, bucket);
+  }
+
+  // Drop the oldest cached script and the URL/basename index entries pointing
+  // at it. Called from handleCDPEvent when scriptsById exceeds MAX_SCRIPTS so a
+  // long-running session does not grow the cache without bound.
+  private evictOldestScript(): void {
+    const oldestEntry = this.scriptsById.entries().next();
+
+    if (oldestEntry.done) return;
+
+    const [scriptId, event] = oldestEntry.value;
+
+    this.scriptsById.delete(scriptId);
+
+    if (!event.url) return;
+
+    const aliases = [event.url];
+
+    if (event.url.startsWith("file://")) {
+      aliases.push(event.url.replace(/^file:\/\//, ""));
+    }
+
+    for (const url of aliases) {
+      if (this.scriptsByUrl.get(url) === scriptId) {
+        this.scriptsByUrl.delete(url);
+      }
+
+      const basename = url.split("/").pop();
+
+      if (!basename) continue;
+
+      const bucket = this.scriptsByBasename.get(basename);
+
+      if (!bucket) continue;
+      bucket.delete(url);
+      if (bucket.size === 0) {
+        this.scriptsByBasename.delete(basename);
+      }
+    }
   }
 
   constructor() {
@@ -276,7 +344,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       });
 
       if (!this.nodeProcess.pid) {
-        throw new Error("Failed to launch Node.js process");
+        throw new ProtocolError("Failed to launch Node.js process");
       }
 
       // Handle process output
@@ -396,7 +464,7 @@ export class NodeJSDebugAdapter extends DebugSession {
 
     if (args.sourceMapPathOverrides) {
       this.sendEvent(
-        new OutputEvent(`Source map path overrides: ${JSON.stringify(args.sourceMapPathOverrides)}\n`, "console"),
+        new OutputEvent(`Source map path overrides: ${safeStringify(args.sourceMapPathOverrides)}\n`, "console"),
       );
     }
   }
@@ -428,6 +496,9 @@ export class NodeJSDebugAdapter extends DebugSession {
         const params = event.params as Protocol.Debugger.ScriptParsedEvent;
 
         this.scriptsById.set(params.scriptId, params);
+        while (this.scriptsById.size > NodeJSDebugAdapter.MAX_SCRIPTS) {
+          this.evictOldestScript();
+        }
         if (params.url) {
           this.indexScriptUrl(params.url, params.scriptId);
           if (params.url.startsWith("file://")) {
@@ -440,6 +511,7 @@ export class NodeJSDebugAdapter extends DebugSession {
               // Indexing the plain-path alias is best-effort: the file:// URL
               // form is already indexed above, so a malformed plain path only
               // costs us the cheap basename-lookup shortcut.
+              this.bumpEventErrorCount('Debugger.scriptParsed');
               this.diagnostic(`indexScriptUrl(plain) failed for ${params.url}: ${errorMessage(error)}`);
             }
           }
@@ -461,6 +533,7 @@ export class NodeJSDebugAdapter extends DebugSession {
           // addBinding can race a context being torn down before we install
           // the binding; fall through silently. New contexts retry on their
           // own executionContextCreated event.
+          this.bumpEventErrorCount('Runtime.executionContextCreated');
           this.diagnostic(`Runtime.addBinding for new context failed: ${errorMessage(error)}`);
         }
         break;
@@ -499,6 +572,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         } catch (error) {
           // Surface in DAP_VERBOSE so a misshapen binding payload from the
           // logpoint expression does not silently disappear.
+          this.bumpEventErrorCount('Runtime.bindingCalled');
           this.diagnostic(`bindingCalled forward failed: ${errorMessage(error)}`);
         }
         break;
@@ -701,7 +775,7 @@ export class NodeJSDebugAdapter extends DebugSession {
   ): Promise<{ cdpResult: Protocol.Debugger.SetBreakpointByUrlResponse; line: number; column: number; reason?: string } | null> {
     if (!this.cdpTransport) return null;
 
-    const scriptId = await this.getScriptIdForPath(targetPath, 2000);
+    const scriptId = await this.getScriptIdForPath(targetPath, DEFAULTS.BREAKPOINT_SCRIPT_LOOKUP_TIMEOUT_MS);
 
     this.diagnostic(`Breakpoint target ${targetPath} → scriptId=${scriptId ?? "not-found"}\n`);
 
@@ -741,8 +815,15 @@ export class NodeJSDebugAdapter extends DebugSession {
         column: (setResp.actualLocation.columnNumber ?? chosen.location.columnNumber ?? 0) + 1,
         ...(chosen.moved ? { reason: 'moved to nearest available statement' } : {}),
       };
-    } catch {
-      // Caller will fall through to URL-based placement.
+    } catch (error) {
+      // Caller will fall through to URL-based placement. Emit a diagnostic so
+      // a regression in getPossibleBreakpoints / setBreakpoint isn't masked
+      // when the URL fallback also fails -- otherwise only the URL-side error
+      // surfaces and the original cause is lost.
+      this.diagnostic(
+        `scriptId-based placement failed: ${errorMessage(error)}; falling back to URL placement\n`,
+      );
+
       return null;
     }
   }
@@ -755,7 +836,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     breakpointCondition: string | undefined,
   ): Promise<Protocol.Debugger.SetBreakpointByUrlResponse> {
     if (!this.cdpTransport) {
-      throw new Error('CDP transport not available');
+      throw new NotConnectedError('CDP transport not available');
     }
 
     const fileUrl = pathToFileURL(targetPath).href;
@@ -888,6 +969,11 @@ export class NodeJSDebugAdapter extends DebugSession {
       return;
     }
 
+    // Track which phase of setBreakpoints we're in so the catch can tell the
+    // caller which step failed: a clear-vs-place-vs-build failure used to give
+    // an identical "Set breakpoints failed: ..." message.
+    let stage: 'snapshot' | 'clear' | 'place' | 'build' = 'snapshot';
+
     try {
       const clientLines = args.lines ?? [];
       const sourceBreakpoints = args.breakpoints ?? [];
@@ -897,8 +983,10 @@ export class NodeJSDebugAdapter extends DebugSession {
       // can reuse the existing dapId when it sees the same breakpoint coming back.
       const previousByKey = this.snapshotPreviousDapIds(path);
 
+      stage = 'clear';
       // Clear previous breakpoints for this file via CDP
       await this.clearCDPBreakpoints(path);
+      stage = 'place';
 
       const actualBreakpoints: Breakpoint[] = [];
       const runtimeBreakpoints: NodeJSRuntimeBreakpoint[] = [];
@@ -911,13 +999,18 @@ export class NodeJSDebugAdapter extends DebugSession {
         placement: BreakpointPlacement;
       }
 
-      // Resolve every requested breakpoint in parallel: each placement is an
-      // independent CDP roundtrip and a getPossibleBreakpoints lookup, so a
-      // file with N breakpoints used to pay N sequential network hops. The
-      // *id allocation* loop below stays sequential so dapId / synthetic CDP
-      // id assignment remains deterministic across reruns.
-      const placedSlots: PlacedBreakpointSlot[] = await Promise.all(
-        Array.from({ length: total }, async (_, i): Promise<PlacedBreakpointSlot> => {
+      // Resolve every requested breakpoint with bounded parallelism: each
+      // placement is an independent CDP roundtrip and a getPossibleBreakpoints
+      // lookup, so a file with N breakpoints used to pay N sequential network
+      // hops. The *id allocation* loop below stays sequential so dapId /
+      // synthetic CDP id assignment remains deterministic across reruns.
+      // Cap at SET_BREAKPOINTS_CONCURRENCY so a file with hundreds of points
+      // can't fan out hundreds of concurrent CDP requests at once.
+      const indices = Array.from({ length: total }, (_, i) => i);
+      const placedSlots: PlacedBreakpointSlot[] = await mapWithConcurrency(
+        indices,
+        DEFAULTS.SET_BREAKPOINTS_CONCURRENCY,
+        async (i): Promise<PlacedBreakpointSlot> => {
           const fallbackLine = clientLines[i] ?? 1;
           const sourceBreakpoint: DebugProtocol.SourceBreakpoint = sourceBreakpoints[i] ?? { line: fallbackLine };
           const line = clientLines[i] ?? sourceBreakpoint.line;
@@ -935,9 +1028,10 @@ export class NodeJSDebugAdapter extends DebugSession {
 
             return { line, column, sourceBreakpoint, placement: { cdpResult: null, reason } };
           }
-        }),
+        },
       );
 
+      stage = 'build';
       for (const slot of placedSlots) {
         const { line, column, sourceBreakpoint, placement } = slot;
         const { runtimeBp, actualBp } = this.buildBreakpointEntry(path, line, column, sourceBreakpoint, placement, previousByKey);
@@ -961,7 +1055,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       this.sendErrorResponse(
         response,
         DAP_ERROR_CODES.SET_BREAKPOINTS_FAILED,
-        `Set breakpoints failed: ${errorMessage(error)}`,
+        `Set breakpoints failed at stage=${stage}: ${errorMessage(error)}`,
       );
     }
   }
@@ -1151,7 +1245,7 @@ export class NodeJSDebugAdapter extends DebugSession {
 
   private requireTransport(): CDPTransport {
     if (!this.cdpTransport) {
-      throw new Error('Not attached to a debugger');
+      throw new NotConnectedError('Not attached to a debugger');
     }
 
     return this.cdpTransport;
@@ -1170,7 +1264,11 @@ export class NodeJSDebugAdapter extends DebugSession {
       return remote.unserializableValue;
     }
     if (remote.value !== undefined) {
-      return typeof remote.value === 'string' ? remote.value : JSON.stringify(remote.value);
+      if (typeof remote.value === 'string') {
+        return remote.value;
+      }
+
+      return safeStringify(remote.value) ?? String(remote.value);
     }
 
     return remote.description ?? remote.type;
@@ -1255,7 +1353,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     }
 
     if (args.frameId < 0 || args.frameId >= this.currentCallFrames.length) {
-      throw new Error(`Frame ${args.frameId} not found`);
+      throw new NotFoundError(`Frame ${args.frameId} not found`);
     }
 
     const frame = this.currentCallFrames[args.frameId]!;
@@ -1284,7 +1382,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     const handle = this.variableHandles.get(args.variablesReference);
 
     if (!handle) {
-      throw new Error(`Variable reference ${args.variablesReference} not found`);
+      throw new NotFoundError(`Variable reference ${args.variablesReference} not found`);
     }
 
     const {objectId} = handle;
@@ -1362,7 +1460,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     }
 
     if (exceptionDetails) {
-      throw new Error(exceptionDetails.exception?.description ?? exceptionDetails.text);
+      throw new ProtocolError(exceptionDetails.exception?.description ?? exceptionDetails.text);
     }
 
     const reference = remote.objectId
@@ -1382,11 +1480,11 @@ export class NodeJSDebugAdapter extends DebugSession {
     const handle = this.variableHandles.get(args.variablesReference);
 
     if (handle?.kind !== 'scope') {
-      throw new Error('setVariable is only supported on scope references');
+      throw new ValidationError('setVariable is only supported on scope references');
     }
 
     if (handle.frameIndex < 0 || handle.frameIndex >= this.currentCallFrames.length) {
-      throw new Error(`Frame ${handle.frameIndex} not found`);
+      throw new NotFoundError(`Frame ${handle.frameIndex} not found`);
     }
 
     const callFrame = this.currentCallFrames[handle.frameIndex]!;
@@ -1406,7 +1504,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     );
 
     if (evalResult.exceptionDetails) {
-      throw new Error(evalResult.exceptionDetails.exception?.description ?? evalResult.exceptionDetails.text);
+      throw new ProtocolError(evalResult.exceptionDetails.exception?.description ?? evalResult.exceptionDetails.text);
     }
 
     const newValue: Protocol.Runtime.CallArgument = evalResult.result.objectId
@@ -1458,26 +1556,42 @@ export class NodeJSDebugAdapter extends DebugSession {
     const ex = this.lastException;
 
     if (!ex) {
-      throw new Error('No exception information available');
+      throw new NotFoundError('No exception information available');
     }
+
+    // CDP Debugger.setPauseOnExceptions state -> DAP ExceptionBreakMode:
+    //   'none'     -> 'never'      (no pause configured)
+    //   'uncaught' -> 'unhandled'  (pause only on unhandled exceptions)
+    //   'all'      -> 'always'     (pause on every exception)
+    //   'caught'   -> 'always'     (DAP has no exact equivalent; 'always' is the
+    //                               closest canonical value -- a pause does occur)
+    const breakMode: DebugProtocol.ExceptionBreakMode =
+      this.exceptionPauseState === 'all' || this.exceptionPauseState === 'caught' ? 'always'
+        : this.exceptionPauseState === 'uncaught' ? 'unhandled'
+          : 'never';
 
     return this.okResponse<DebugProtocol.ExceptionInfoResponse>('exceptionInfo', {
       exceptionId: String(ex.exceptionId),
       description: ex.exception?.description ?? ex.text,
-      breakMode: this.exceptionPauseState === 'all' ? 'always' : 'unhandled',
+      breakMode,
     });
   }
 
   public async setExceptionBreakpoints(
     args: DebugProtocol.SetExceptionBreakpointsArguments,
   ): Promise<DebugProtocol.SetExceptionBreakpointsResponse> {
-    let state: 'none' | 'uncaught' | 'all' = 'none';
+    let state: 'none' | 'caught' | 'uncaught' | 'all' = 'none';
     const {filters} = args;
 
+    // CDP Debugger.setPauseOnExceptions supports four states (none/caught/uncaught/all).
+    // The previous mapping silently dropped filters=['caught'] to state='none' while
+    // reporting verified=true, leaving the caller convinced the filter was honoured.
     if (filters.includes('all') || (filters.includes('caught') && filters.includes('uncaught'))) {
       state = 'all';
     } else if (filters.includes('uncaught')) {
       state = 'uncaught';
+    } else if (filters.includes('caught')) {
+      state = 'caught';
     }
 
     await this.requireTransport().sendCommand('Debugger.setPauseOnExceptions', { state });
@@ -1492,7 +1606,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     args: DebugProtocol.BreakpointLocationsArguments,
   ): Promise<DebugProtocol.BreakpointLocationsResponse> {
     const path = args.source.path ?? '';
-    const scriptId = await this.getScriptIdForPath(path, 200);
+    const scriptId = await this.getScriptIdForPath(path, DEFAULTS.BREAKPOINT_LOCATIONS_LOOKUP_TIMEOUT_MS);
 
     if (!scriptId) {
       return this.okResponse<DebugProtocol.BreakpointLocationsResponse>('breakpointLocations', {
@@ -1527,7 +1641,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     args: DebugProtocol.RestartFrameArguments,
   ): Promise<DebugProtocol.RestartFrameResponse> {
     if (args.frameId < 0 || args.frameId >= this.currentCallFrames.length) {
-      throw new Error(`Frame ${args.frameId} not found`);
+      throw new NotFoundError(`Frame ${args.frameId} not found`);
     }
 
     const frame = this.currentCallFrames[args.frameId]!;
@@ -1542,7 +1656,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     // The V8 inspector does not expose a primitive jump operation; surface a
     // descriptive error so the MCP client knows the operation is impossible
     // here, not just temporarily failing.
-    throw new Error(
+    throw new ValidationError(
       'goto is not supported by the Node.js inspector: V8 has no primitive jump operation; ' +
       'use restartFrame to rerun a stack frame or set a breakpoint and continue/pause to navigate',
     );
@@ -1598,7 +1712,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       this.sendEvent(new DAEvent('mcpLogpoint', {
         executionContextId: 0,
         name: '__mcpLogPoint',
-        payload: JSON.stringify(payload),
+        payload: safeStringify(payload),
       }));
     }
   }

@@ -46,9 +46,13 @@ jobs:
         # engines.node is >=22; 24 is the version published from npm-publish.yml.
 
     steps:
-    - uses: actions/checkout@v6
+    # actions/checkout pinned to v6.0.2 commit SHA — pinning to commit SHA
+    # rather than @v6 means a compromised maintainer cannot re-point the
+    # major tag at malicious code; bumps require an explicit PR.
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v6
+      # actions/setup-node pinned to v6.4.0 commit SHA (see note above).
+      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
       with:
         node-version: ${{ matrix.node-version }}
         cache: 'npm'
@@ -66,8 +70,9 @@ jobs:
       # under different Node versions just creates noise on the Codecov side
       # without changing what we measure.
       if: matrix.node-version == '22.x'
-      # codecov/codecov-action pinned to v6.0.1
-      uses: codecov/codecov-action@cddd853df119a48c5be31a973f8cd97e12e35e16
+      # codecov/codecov-action pinned to v6.0.1 commit SHA (not tag object SHA,
+      # which can be re-pointed — only commit SHAs are immutable references).
+      uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354
       with:
         # OIDC removes the need for a long-lived CODECOV_TOKEN secret —
         # the action exchanges a short-lived GitHub-issued JWT for an
@@ -126,8 +131,8 @@ jobs:
       # with `flags: integration` so Codecov can show a unit-vs-integration
       # breakdown alongside the merged total.
       if: matrix.node-version == '22.x'
-      # codecov/codecov-action pinned to v6.0.1
-      uses: codecov/codecov-action@cddd853df119a48c5be31a973f8cd97e12e35e16
+      # codecov/codecov-action pinned to v6.0.1 commit SHA (see note above).
+      uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354
       with:
         use_oidc: true
         files: ./coverage-integration/lcov.info
@@ -143,8 +148,10 @@ jobs:
     timeout-minutes: 5
 
     steps:
-    - uses: actions/checkout@v6
-    - uses: actions/setup-node@v6
+    # actions/checkout pinned to v6.0.2 commit SHA (see build job above).
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    # actions/setup-node pinned to v6.4.0 commit SHA (see build job above).
+    - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
       with:
         node-version: 22.x
         cache: 'npm'

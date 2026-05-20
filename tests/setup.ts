@@ -1,4 +1,4 @@
-import path from "path";
+import path from "node:path";
 import { beforeAll, afterAll } from "vitest";
 import { MCPClient } from "./utils/mcp-client.js";
 import { setGlobalMCPClient, spawnedProcesses } from "./globals.js";

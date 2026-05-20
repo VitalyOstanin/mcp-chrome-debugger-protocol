@@ -85,7 +85,7 @@ flowchart LR
 
 ## Requirements
 
-- Node.js >= 22 (matches `engines.node` in `package.json`; CI runs Node 22 and 24, and `.nvmrc` pins the recommended local version).
+- Node.js >= 22 (set in `engines.node`). Recommended for local development: Node 24 (pinned in `.nvmrc`). CI runs the matrix against Node 22 and 24.
 - npm >= 11 (required only for `npm publish`; everyday development works on npm 10+).
 
 ## Installation
@@ -162,7 +162,7 @@ npm run dev:test           # launch the test-app fixture under --inspect for man
 
 End-to-end loop in 30 seconds: run `npm run dev:test` in one terminal (it starts the test-app fixture under `--inspect=9229`), then in another terminal run the MCP server (`npm run dev:server`) and use the `attach` tool from your client.
 
-Formatting: this project relies on ESLint plus `.editorconfig`. There is no separate `prettier` configuration, and there is no `npm run format` script -- run `npm run lint:fix` to apply style fixes. If your editor inserts conflicting formatting, configure it to defer to ESLint.
+Formatting: this project relies on ESLint plus `.editorconfig`. There is no separate `prettier` configuration. Run `npm run lint:fix` (or its alias `npm run format`) to apply style fixes. If your editor inserts conflicting formatting, configure it to defer to ESLint.
 
 See [AGENTS.md](AGENTS.md) for detailed contributor rules and project conventions.
 
@@ -182,7 +182,7 @@ Reserve `DAP_VERBOSE=1` for local debugging of the adapter itself. The default (
 
 - Connection: `attach`, `disconnect`, `restart`, `terminate`
 - Breakpoints: `setBreakpoints` (supports `logMessage`), `removeBreakpoint`, `getBreakpoints`, `setExceptionBreakpoints`, `breakpointLocations`
-- Execution Control: `continue`, `pause`, `next` (step over), `stepIn`, `stepOut`, `goto`, `restartFrame`
+- Execution Control: `continue`, `pause`, `next` (step over), `stepIn`, `stepOut`, `restartFrame`
 - Inspection: `evaluate`, `stackTrace`, `variables`, `scopes`, `setVariable`, `threads`, `loadedSources`, `exceptionInfo`
 - Monitoring: `getLogpointHits`, `clearLogpointHits`, `getDebuggerEvents`, `clearDebuggerEvents`, `getDebuggerState`
 - Source Maps: `resolveOriginalPosition`, `resolveGeneratedPosition`

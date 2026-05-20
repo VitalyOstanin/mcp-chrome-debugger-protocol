@@ -1,7 +1,7 @@
-import { spawn, type ChildProcess } from "child_process";
-import path from "path";
-import fs from "fs";
+import { spawn, type ChildProcess } from "node:child_process";
+import path from "node:path";
 import { setTimeout } from "node:timers/promises";
+import { findProjectRoot } from "../../src/utils.js";
 import { spawnedProcesses } from "../setup";
 
 export interface TestAppOptions {
@@ -23,31 +23,25 @@ export class TestAppManager {
 
   constructor(appType: 'typescript' | 'javascript' = 'typescript') {
     this.appType = appType;
+    this.appPath = TestAppManager.resolveAppPath(appType);
+  }
 
-    // Find the project root by looking for package.json
-    let currentDir = __dirname;
+  private static resolveAppPath(appType: 'typescript' | 'javascript'): string {
+    const relative = appType === 'javascript'
+      ? ['tests', 'fixtures', 'test-app-js', 'src', 'index.js']
+      : ['tests', 'fixtures', 'test-app', 'dist', 'index.js'];
+    const projectRoot = findProjectRoot(__dirname);
 
-    while (currentDir !== path.dirname(currentDir)) {
-      const packageJsonPath = path.join(currentDir, 'package.json');
-
-      if (fs.existsSync(packageJsonPath)) {
-        // Found project root - construct absolute path to test app
-        if (appType === 'javascript') {
-          this.appPath = path.join(currentDir, 'tests', 'fixtures', 'test-app-js', 'src', 'index.js');
-        } else {
-          this.appPath = path.join(currentDir, 'tests', 'fixtures', 'test-app', 'dist', 'index.js');
-        }
-
-        return;
-      }
-      currentDir = path.dirname(currentDir);
+    if (projectRoot) {
+      return path.join(projectRoot, ...relative);
     }
+
     // Fallback to relative path if project root not found
-    if (appType === 'javascript') {
-      this.appPath = path.resolve(__dirname, "../fixtures/test-app-js/src/index.js");
-    } else {
-      this.appPath = path.resolve(__dirname, "../fixtures/test-app/dist/index.js");
-    }
+    const fallback = appType === 'javascript'
+      ? "../fixtures/test-app-js/src/index.js"
+      : "../fixtures/test-app/dist/index.js";
+
+    return path.resolve(__dirname, fallback);
   }
 
   async start(options: TestAppOptions = {}): Promise<{ pid: number; port?: number; serverPort?: number; webSocketUrl?: string }> {
@@ -369,29 +363,6 @@ export class TestAppManager {
   }
 
   private updateAppPath(): void {
-    // Find the project root by looking for package.json
-    let currentDir = __dirname;
-
-    while (currentDir !== path.dirname(currentDir)) {
-      const packageJsonPath = path.join(currentDir, 'package.json');
-
-      if (fs.existsSync(packageJsonPath)) {
-        // Found project root - construct absolute path to test app
-        if (this.appType === 'javascript') {
-          this.appPath = path.join(currentDir, 'tests', 'fixtures', 'test-app-js', 'src', 'index.js');
-        } else {
-          this.appPath = path.join(currentDir, 'tests', 'fixtures', 'test-app', 'dist', 'index.js');
-        }
-
-        return;
-      }
-      currentDir = path.dirname(currentDir);
-    }
-    // Fallback to relative path if project root not found
-    if (this.appType === 'javascript') {
-      this.appPath = path.resolve(__dirname, "../fixtures/test-app-js/src/index.js");
-    } else {
-      this.appPath = path.resolve(__dirname, "../fixtures/test-app/dist/index.js");
-    }
+    this.appPath = TestAppManager.resolveAppPath(this.appType);
   }
 }

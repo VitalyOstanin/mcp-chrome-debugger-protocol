@@ -1,6 +1,7 @@
 import { TraceMap, originalPositionFor, generatedPositionFor, LEAST_UPPER_BOUND } from "@jridgewell/trace-mapping";
 import { readFile, stat, readdir, access } from "node:fs/promises";
 import { dirname, join, resolve as resolvePath } from "node:path";
+import safeStringify from "safe-stable-stringify";
 import { findProjectRoot, errorMessage } from "./utils.js";
 import { BUILD_DIRS, SOURCE_DIR_MARKER } from "./constants.js";
 
@@ -51,11 +52,12 @@ interface SourceMapListing {
 }
 
 // Wrap a JSON payload in the MCP response envelope used by every public method
-// of SourceMapResolver. Centralising this kills the "{ content: [{ type, text:
-// JSON.stringify(...) }] }" boilerplate that previously appeared seven times.
+// of SourceMapResolver. Centralising this kills the boilerplate that previously
+// appeared seven times. Uses safe-stable-stringify so wire-format size and
+// key order match createSuccessResponse / createErrorResponse from utils.ts.
 function srMapTextResponse(payload: unknown): { content: Array<{ type: string; text: string }> } {
   return {
-    content: [{ type: "text", text: JSON.stringify(payload) }],
+    content: [{ type: "text", text: safeStringify(payload) ?? '' }],
   };
 }
 
@@ -166,37 +168,36 @@ export class SourceMapResolver {
 
   // Walk a directory recursively, collecting every *.js.map file. Used by the build-dir
   // scan; ignores read errors silently because directories may exist but be unreadable.
+  // Uses node:fs/promises readdir with `recursive: true` so the whole subtree is walked
+  // by Node's libuv-based worker pool instead of a sequential JS-level recursion.
   private async collectSourceMapFiles(dir: string): Promise<string[]> {
+    let entries;
+
+    try {
+      entries = await readdir(dir, { withFileTypes: true, recursive: true });
+    } catch {
+      // Missing or unreadable build subtree is not fatal; callers handle empty
+      // listings.
+      return [];
+    }
+
     const results: string[] = [];
-    const walk = async (current: string): Promise<void> => {
-      let entries;
 
-      try {
-        entries = await readdir(current, { withFileTypes: true });
-      } catch {
-        // Skip unreadable directories (permission denied / race during walk);
-        // a missing build subtree is not fatal, callers handle empty listings.
-        return;
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith('.js.map')) {
+        results.push(join(entry.parentPath, entry.name));
       }
-
-      for (const entry of entries) {
-        const full = join(current, entry.name);
-
-        if (entry.isDirectory()) {
-          await walk(full);
-        } else if (entry.isFile() && entry.name.endsWith('.js.map')) {
-          results.push(full);
-        }
-      }
-    };
-
-    await walk(dir);
+    }
 
     return results;
   }
 
   private async findSourceMapsInDirs(roots: string[]): Promise<string[]> {
-    const cacheKey = [...roots].sort().join('|');
+    // Use safeStringify so a root path containing `|` (legal on POSIX) cannot
+    // collide with another root list whose components, joined by `|`, happen
+    // to produce the same string after sort. safe-stable-stringify keeps the
+    // serialization deterministic and matches project policy banning raw JSON.stringify.
+    const cacheKey = safeStringify([...roots].sort());
     const now = Date.now();
     const cached = this.sourceMapListingCache.get(cacheKey);
 
@@ -325,14 +326,17 @@ export class SourceMapResolver {
 
         if (!resolved) {
           const projectRoot = findProjectRoot(filePath);
-          const sourceMapPaths = projectRoot ? await this.findSourceMapsInDirs([projectRoot]) : [];
+          // Set-based dedup: avoid the O(N^2) array.includes() loop when the
+          // project has dozens of .js.map candidates.
+          const dedup = new Set<string>(
+            projectRoot ? await this.findSourceMapsInDirs([projectRoot]) : [],
+          );
 
           for (const candidate of siblings) {
-            if (!sourceMapPaths.includes(candidate)) {
-              sourceMapPaths.push(candidate);
-            }
+            dedup.add(candidate);
           }
 
+          const sourceMapPaths = Array.from(dedup);
           const resolveResult = await this.resolveGeneratedPosition(relativePath, lineNumber, columnNumber, sourceMapPaths, filePath);
           const resolveData = JSON.parse(resolveResult.content[0]!.text);
 
@@ -519,14 +523,19 @@ export class SourceMapResolver {
       return sourceMapPaths.filter((_, i) => existsFlags[i]);
     }
 
-    const collected: string[] = [];
+    // Set-based dedup: previous loop did Array.includes() per candidate, which
+    // is O(N^2) for files with dozens of .js.map siblings on the hot
+    // setBreakpoint path.
+    const collected = new Set<string>();
 
     if (originalSourcePath) {
       const projectRoot = findProjectRoot(originalSourcePath);
 
       if (projectRoot) {
         try {
-          collected.push(...await this.findSourceMapsInDirs([projectRoot]));
+          for (const m of await this.findSourceMapsInDirs([projectRoot])) {
+            collected.add(m);
+          }
         } catch {
           // findSourceMapsInDirs swallows per-directory errors itself; this
           // outer catch is a safety net for an unexpected throw (TraceMap
@@ -535,17 +544,17 @@ export class SourceMapResolver {
       }
 
       for (const candidate of await this.siblingMapCandidates(originalSourcePath)) {
-        if (!collected.includes(candidate)) {
-          collected.push(candidate);
-        }
+        collected.add(candidate);
       }
     }
 
-    if (collected.length === 0) {
-      collected.push(...await this.findSourceMapsInDirs([process.cwd()]));
+    if (collected.size === 0) {
+      for (const m of await this.findSourceMapsInDirs([process.cwd()])) {
+        collected.add(m);
+      }
     }
 
-    return collected;
+    return Array.from(collected);
   }
 
   // Match using basename lookup first (cheap), then fall back to suffix matching only on

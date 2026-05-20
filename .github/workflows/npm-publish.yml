@@ -23,11 +23,19 @@ jobs:
     # debuggee) cannot eat the GitHub Actions default 6h budget. Mirrors the
     # 25-min cap in node.js.yml.
     timeout-minutes: 25
+    # Match the matrix used in node.js.yml CI so the publish gate exercises
+    # both supported Node versions. Without this the release path was only
+    # validated on Node 22 even though node.js.yml runs both 22 and 24, so a
+    # 24-only regression could slip through to npm publish.
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['22', '24']
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: ${{ matrix.node-version }}
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
@@ -50,6 +58,9 @@ jobs:
         # missing files in the `files` allow-list, broken shebang, missing
         # runtime dependencies, wrong `bin` path. Tarball is discarded — the
         # actual publish below repacks from source.
+        # Only run on one matrix entry — pack output is identical across Node
+        # versions and an extra install round trip adds CI time without signal.
+        if: matrix.node-version == '22'
         shell: bash
         run: |
           set -euo pipefail

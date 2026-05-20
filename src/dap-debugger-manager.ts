@@ -1,9 +1,11 @@
 import type { DAPClient } from "./dap-client.js";
 import type { TruncationOptions } from "./types.js";
 import { findProjectRoot, withErrorHandling } from "./utils.js";
+import { NotFoundError, ProtocolError } from "./errors.js";
 import { DEFAULTS, DEFAULT_THREAD_ID } from "./constants.js";
 import type { DebugProtocol } from '@vscode/debugprotocol';
 import { resolve, relative } from "node:path";
+import safeStringify from "safe-stable-stringify";
 import { SourceMapResolver } from "./source-map-resolver.js";
 
 /**
@@ -110,20 +112,17 @@ export class DAPDebuggerManager {
     };
     const result = truncateValue(data, 0);
     // Match the wire-format exactly when measuring the payload size:
-    // createSuccessResponse / createErrorResponse both call JSON.stringify
-    // without indentation, so comparing against an indented form (the previous
-    // `null, 2`) overshot the real size by up to ~30% on nested objects and
-    // tripped the truncation fallback for payloads that would have fit. Drop
-    // the indent here and only pay the second stringify (for originalSize) on
-    // the unhappy path -- happy path now does a single JSON.stringify(result).
-    const jsonString = JSON.stringify(result);
+    // createSuccessResponse / createErrorResponse serialize the response via
+    // safeStringify without indentation, so the measurement must use the same
+    // serializer. Run it once; the fallback path reuses the same string
+    // instead of paying a second stringify on the original data.
+    const jsonString = safeStringify(result) ?? '';
 
     if (jsonString.length > maxLength) {
       return {
         result: {
           error: 'Response too large',
           preview: `${jsonString.substring(0, previewBudget)}...`,
-          originalSize: JSON.stringify(data).length,
           truncatedSize: jsonString.length,
         },
         truncated: true,
@@ -139,10 +138,10 @@ export class DAPDebuggerManager {
 
   // Build a contextual DAP error so the MCP client gets the underlying
   // response.message and the call arguments instead of a generic "Failed to X".
-  private dapError(operation: string, response: DebugProtocol.Response, ctx: Record<string, unknown>): Error {
-    const ctxString = Object.keys(ctx).length > 0 ? ` (ctx: ${JSON.stringify(ctx)})` : '';
+  private dapError(operation: string, response: DebugProtocol.Response, ctx: Record<string, unknown>): ProtocolError {
+    const ctxString = Object.keys(ctx).length > 0 ? ` (ctx: ${safeStringify(ctx)})` : '';
 
-    return new Error(`Failed to ${operation}: ${response.message ?? '(no message)'}${ctxString}`);
+    return new ProtocolError(`Failed to ${operation}: ${response.message ?? '(no message)'}${ctxString}`);
   }
 
   // Common shape: send a DAP execution-control request with no body, return a
@@ -185,11 +184,11 @@ export class DAPDebuggerManager {
   async removeBreakpoint(breakpointId: number) {
     return withErrorHandling(async () => {
       // Find the tracked breakpoint to get source info (used for the response).
-      const trackedBreakpoint = this.dapClient.getTrackedBreakpoints()
-        .find(bp => bp.breakpointId === breakpointId);
+      // Uses O(1) Map.get() instead of the old materialise-then-find linear scan.
+      const trackedBreakpoint = this.dapClient.getTrackedBreakpoint(breakpointId);
 
       if (!trackedBreakpoint) {
-        throw new Error(`Breakpoint ${breakpointId} not found`);
+        throw new NotFoundError(`Breakpoint ${breakpointId} not found`);
       }
 
       // Remove a single breakpoint by its DAP id; siblings in the same file are not
@@ -198,14 +197,17 @@ export class DAPDebuggerManager {
       const result = await this.dapClient.removeBreakpointByDapId(breakpointId);
 
       if (!result.removed) {
-        throw new Error(`Breakpoint ${breakpointId} not found in adapter`);
+        throw new NotFoundError(`Breakpoint ${breakpointId} not found in adapter`);
       }
 
       this.dapClient.removeTrackedBreakpoint(breakpointId);
 
+      // removeBreakpointByDapId only returns { removed: true } with a defined
+      // filePath; the `!removed` branch above throws, so this assignment is
+      // safe without a fallback to trackedBreakpoint.originalRequest.filePath.
       return {
         breakpointId,
-        filePath: result.filePath ?? trackedBreakpoint.originalRequest.filePath,
+        filePath: result.filePath,
         message: "Breakpoint removed successfully",
       };
     }, { operation: 'remove breakpoint', breakpointId });
@@ -388,7 +390,7 @@ export class DAPDebuggerManager {
       );
 
       if (!response.success) {
-        throw new Error("Failed to set breakpoints");
+        throw new ProtocolError("Failed to set breakpoints");
       }
 
       // Track all breakpoints that were successfully created. Both shapes
@@ -405,10 +407,30 @@ export class DAPDebuggerManager {
         ?? lines?.map((line): TrackedSourceItem => ({ line }));
 
       if (trackedSource) {
-        response.body.breakpoints.forEach((actualBreakpoint, index) => {
-          const bp = trackedSource[index];
+        // Re-run source-map resolution on the manager side so the tracked
+        // breakpoint records whether the adapter actually hopped TS->JS. The
+        // previous implementation hard-coded `used: false`, which silently
+        // hid TS-source breakpoints behind the generated JS location in
+        // `getBreakpoints()` listings.
+        await Promise.all(
+          response.body.breakpoints.map(async (actualBreakpoint, index) => {
+            const bp = trackedSource[index];
 
-          if (actualBreakpoint.id && bp) {
+            if (!(actualBreakpoint.id && bp)) {
+              return;
+            }
+
+            const columnNumber = bp.column ?? 1;
+            const resolution = await this.sourceMapResolver.resolveSourceMapPosition(
+              absolutePath,
+              bp.line,
+              columnNumber,
+            );
+            const used = resolution.sourceMapInfo.success
+              && (resolution.targetFilePath !== absolutePath
+                || resolution.targetLineNumber !== bp.line
+                || resolution.targetColumnNumber !== columnNumber);
+
             this.dapClient.addTrackedBreakpoint({
               breakpointId: actualBreakpoint.id,
               type: bp.logMessage ? 'logpoint' : 'breakpoint',
@@ -418,21 +440,30 @@ export class DAPDebuggerManager {
                 // MCP/DAP coordinates are 1-based; default the column to 1 so
                 // tracking matches the adapter (nodejs-debug-adapter:805) and
                 // SourceMapResolver, which reject column < 1.
-                columnNumber: bp.column ?? 1,
+                columnNumber,
                 condition: bp.condition,
                 logMessage: bp.logMessage,
               },
               actualLocation: {
                 lineNumber: actualBreakpoint.line ?? bp.line,
-                columnNumber: actualBreakpoint.column ?? (bp.column ?? 1),
+                columnNumber: actualBreakpoint.column ?? columnNumber,
               },
-              sourceMapResolution: {
-                used: false,
-              },
+              sourceMapResolution: used
+                ? {
+                  used: true,
+                  sourceMapFile: resolution.sourceMapInfo.sourceMapUsed,
+                  matchedSource: resolution.sourceMapInfo.matchedSource,
+                  targetFile: resolution.targetFilePath,
+                  targetLocation: {
+                    lineNumber: resolution.targetLineNumber,
+                    columnNumber: resolution.targetColumnNumber,
+                  },
+                }
+                : { used: false },
               timestamp: new Date(),
             });
-          }
-        });
+          }),
+        );
       }
 
       return {
@@ -466,7 +497,7 @@ export class DAPDebuggerManager {
       );
 
       if (!response.success) {
-        throw new Error("Failed to get stack trace");
+        throw new ProtocolError("Failed to get stack trace");
       }
 
       const { result, truncated } = this.truncateResult(response.body, options);
@@ -492,7 +523,7 @@ export class DAPDebuggerManager {
       );
 
       if (!response.success) {
-        throw new Error("Failed to get variables");
+        throw new ProtocolError("Failed to get variables");
       }
 
       const { result, truncated } = this.truncateResult(response.body, options);

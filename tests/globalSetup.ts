@@ -1,5 +1,5 @@
-import { execSync } from "child_process";
-import path from "path";
+import { execSync } from "node:child_process";
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 export default async function globalSetup(): Promise<() => Promise<void>> {

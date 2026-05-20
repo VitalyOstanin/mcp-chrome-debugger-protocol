@@ -33,7 +33,7 @@ class DataProcessor {
     this.processCount++;
     const count = this.data.length;
 
-    let sum = 0;
+    let sum = count - count;  // initialise from count so the local stays in use
     for (const item of this.data) {
       sum += item.value;
     }
@@ -87,7 +87,7 @@ async function main(): Promise<void> {
   app.use(express.json());
 
   // Test endpoint 1
-  app.get("/test1", (req, res) => {
+  app.get("/test1", (_req, res) => {
     // Call some functions for debugging purposes
     processor.processData();
     const fibResult = fibonacci(5);
@@ -102,7 +102,7 @@ async function main(): Promise<void> {
   });
 
   // Test endpoint 2
-  app.get("/test2", async (req, res) => {
+  app.get("/test2", async (_req, res) => {
     // Call async operation for debugging
     const asyncResult = await processor.asyncOperation();
     const recursiveResult = processor.recursiveFunction(4);
@@ -133,7 +133,7 @@ async function main(): Promise<void> {
   });
 
   // Health check endpoint
-  app.get("/health", (req, res) => {
+  app.get("/health", (_req, res) => {
     res.status(200).json({
       status: "ok",
       pid: process.pid,

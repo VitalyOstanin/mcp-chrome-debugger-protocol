@@ -3,6 +3,8 @@
 // duplication between createLogpointExpression and simulateLogpointHit and keeps
 // placeholder syntax consistent in one place.
 
+import safeStringify from "safe-stable-stringify";
+
 const PLACEHOLDER_RE = /\{([^}]+)\}/g;
 
 /**
@@ -27,6 +29,12 @@ export function extractLogpointPlaceholders(message: string): string[] {
  * Build a JS expression for `Debugger.setBreakpoint` `condition`. When run in
  * the debuggee, the expression sends a `__mcpLogPoint` binding payload with the
  * rendered message and per-placeholder values, then returns false (never pause).
+ *
+ * Exception to the project-wide ban on JSON.stringify: the literal `JSON.stringify`
+ * tokens below are emitted into the debuggee runtime (via CDP setBreakpoint
+ * condition / Runtime.evaluate). safe-stable-stringify is not available in the
+ * debuggee process, so the standard JSON global is the only stable choice here.
+ * Adapter-side serialization continues to use safeStringify.
  */
 export function buildLogpointExpression(logMessage: string): string {
   const exprs = extractLogpointPlaceholders(logMessage);
@@ -71,11 +79,9 @@ export function renderLogpointMessage(logMessage: string, vars: Record<string, u
     const val = vars[key];
 
     if (val !== null && typeof val === 'object') {
-      try {
-        return JSON.stringify(val);
-      } catch {
-        return String(val);
-      }
+      // safe-stable-stringify handles cycles by returning '[Circular]' instead
+      // of throwing, which JSON.stringify can't do without a custom replacer.
+      return safeStringify(val);
     }
 
     return String(val);
@@ -90,8 +96,13 @@ export function renderLogpointMessage(logMessage: string, vars: Record<string, u
 export function lookupDottedPath(expr: string, variables: Record<string, unknown>): unknown {
   const parts = expr.split('.');
 
+  // Stop descent on scalar intermediates so {a.b.c} renders undefined the same
+  // way as optional chaining: `(0)['x']` is undefined in JS, but treating `0`
+  // like a Record still hides that the path broke at a scalar.
   return parts.reduce<unknown>(
-    (acc, part) => (acc !== null && acc !== undefined ? (acc as Record<string, unknown>)[part] : undefined),
+    (acc, part) => (acc !== null && typeof acc === 'object'
+      ? (acc as Record<string, unknown>)[part]
+      : undefined),
     variables,
   );
 }

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MCPClient } from "../utils/mcp-client";
 import { TestAppManager } from "../utils/test-app-manager";
 import { DebuggerTestHelper } from "../utils/debugger-test-helper";
-import path from "path";
+import path from "node:path";
 import { setTimeout } from "node:timers/promises";
 
 describe("MCP Chrome Debugger Protocol - Tool State Management", () => {

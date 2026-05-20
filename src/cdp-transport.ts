@@ -4,6 +4,7 @@ import { setTimeout } from 'node:timers/promises';
 import type ProtocolMappingApi from 'devtools-protocol/types/protocol-mapping';
 import { DEFAULTS } from './constants.js';
 import { errorMessage } from './utils.js';
+import { NotConnectedError, NotFoundError, ProtocolError } from './errors.js';
 
 export interface CDPTransportOptions {
   host?: string | undefined;
@@ -45,7 +46,7 @@ export class CDPTransport extends EventEmitter {
     });
 
     if (targets.length === 0) {
-      throw new Error('No debuggable targets found');
+      throw new NotFoundError('No debuggable targets found');
     }
 
     let selectedTarget: CDP.Target;
@@ -56,7 +57,7 @@ export class CDPTransport extends EventEmitter {
       const found = targets.find(t => t.id === this.options.target);
 
       if (!found) {
-        throw new Error(`Target with ID ${this.options.target} not found`);
+        throw new NotFoundError(`Target with ID ${this.options.target} not found`);
       }
       selectedTarget = found;
     } else {
@@ -124,28 +125,35 @@ export class CDPTransport extends EventEmitter {
   }
 
   async enableDomains(domains: string[]): Promise<void> {
-    if (!this.client) {
-      throw new Error('CDP client not connected');
+    const {client} = this;
+
+    if (!client) {
+      throw new NotConnectedError('CDP client not connected');
     }
 
-    for (const domain of domains) {
+    // Enable each domain in parallel: CDP dispatches by request id, so these
+    // calls are independent. Sequentially we paid one full RTT per domain on
+    // every attach (Runtime, Debugger, Console, Profiler ≈ 4 round trips).
+    // Promise.all rejects on the first error, so we still surface the first
+    // failure with the same ProtocolError envelope; the others are abandoned.
+    await Promise.all(domains.map(async (domain) => {
       try {
         const enableMethod = `${domain}.enable` as keyof CDP.Client;
 
-        if (typeof this.client[enableMethod] === 'function') {
-          await (this.client[enableMethod] as () => Promise<void>)();
+        if (typeof client[enableMethod] === 'function') {
+          await (client[enableMethod] as () => Promise<void>)();
         }
       } catch (error) {
         // Critical path: throw only. Same rationale as connect() -- a parallel
         // emit('error', ...) doubles up log lines for a single failure.
-        throw new Error(`Failed to enable domain ${domain}: ${errorMessage(error)}`, { cause: error });
+        throw new ProtocolError(`Failed to enable domain ${domain}: ${errorMessage(error)}`, { cause: error });
       }
-    }
+    }));
   }
 
   async sendCommand<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
     if (!this.client) {
-      throw new Error('CDP client not connected');
+      throw new NotConnectedError('CDP client not connected');
     }
 
     // Critical path: throw only. The parallel emit('error', ...) used to

@@ -3,7 +3,39 @@ import tseslint from 'typescript-eslint';
 
 export default [
   {
-    ignores: ['src/generated/**', '**/*.cjs', 'dist/**', 'node_modules/**', 'coverage/**']
+    // Single source of truth for ignored paths. Patterns:
+    //   - dist/build outputs and node_modules: never lint generated/3rd-party files.
+    //   - **/*.cjs and **/*.d.ts: CJS interop shims and emitted declaration files.
+    //   - src/generated/**: machine-generated TS modules; rules don't apply.
+    //   - bin/: shipped binaries.
+    //   - scripts/**: mix of shell scripts (.sh, not parseable by ESLint) and one
+    //     ESM helper (.mjs) deliberately exempt from project-wide strict TS rules.
+    //   - tests/fixtures/test-app/{dist,src}/**: TS sources outside the main
+    //     tsconfig (own build); tests/fixtures/test-app-js/**: vanilla JS.
+    //   - eslint.config.js / jest.config.js / *.log / .tmp / .temp / coverage:
+    //     editor- or runtime-only artifacts.
+    // tests/integration/ and tests/utils/ are intentionally NOT ignored — they
+    // are part of the main tsconfig.json and run the full TS rule set.
+    ignores: [
+      'src/generated/**',
+      '**/*.cjs',
+      '**/*.d.ts',
+      'dist/**',
+      'build/**',
+      'node_modules/**',
+      'coverage/**',
+      '*.log',
+      '.tmp/**',
+      '.temp/**',
+      'eslint.config.js',
+      'jest.config.js',
+      'bin/**',
+      'eslint-rules/**',
+      'scripts/**',
+      'tests/fixtures/test-app/dist/**',
+      'tests/fixtures/test-app/src/**',
+      'tests/fixtures/test-app-js/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -130,26 +162,5 @@ export default [
       }],
 
     },
-  },
-  {
-    ignores: [
-      'dist/**',
-      'build/**',
-      'node_modules/**',
-      '*.log',
-      'coverage/**',
-      '.tmp/**',
-      '.temp/**',
-      'eslint.config.js',
-      'jest.config.js',
-      '**/*.d.ts',
-      'src/generated/**', // Auto-generated files
-      'bin/**',
-      'eslint-rules/**', // Custom rules use CommonJS
-      'scripts/**', // Scripts use CommonJS
-      'tests/fixtures/test-app/dist/**', // Compiled test app files
-      'tests/fixtures/test-app/src/**', // Test app TS sources not in tsconfig.lint.json
-      'tests/fixtures/test-app-js/**', // JavaScript test app
-    ],
   },
 ];

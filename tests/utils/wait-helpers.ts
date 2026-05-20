@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import type { MCPClient } from "./mcp-client";
 
 export interface WaitOptions {
@@ -40,7 +41,7 @@ async function waitFor(predicate: () => Promise<boolean>, { timeoutMs = 5000, in
       throw new Error("waitFor: timeout exceeded");
     }
 
-    await new Promise((r) => setTimeout(r, intervalMs));
+    await sleep(intervalMs);
   }
 }
 

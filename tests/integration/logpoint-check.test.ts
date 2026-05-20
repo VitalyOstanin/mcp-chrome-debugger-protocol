@@ -3,13 +3,15 @@ import { MCPClient } from "../utils/mcp-client";
 import { TestAppManager } from "../utils/test-app-manager";
 import { DebuggerTestHelper } from "../utils/debugger-test-helper";
 import { unwrapToolPayload, waitForLogpoint } from "../utils/wait-helpers";
-import path from "path";
+import path from "node:path";
 
 describe("MCP Chrome Debugger Protocol - TS Logpoint Check", () => {
   let mcpClient: MCPClient;
   let testApp: TestAppManager;
   let debuggerHelper: DebuggerTestHelper;
+  let serverPort: number;
   const serverPath = path.resolve(__dirname, "../../dist/index.js");
+  const tsSourcePath = path.resolve(__dirname, "../fixtures/test-app/src/index.ts");
 
   beforeEach(async () => {
     mcpClient = new MCPClient(serverPath);
@@ -17,6 +19,15 @@ describe("MCP Chrome Debugger Protocol - TS Logpoint Check", () => {
     debuggerHelper = new DebuggerTestHelper(mcpClient, testApp);
 
     await mcpClient.connect();
+
+    const { pid, port, serverPort: appServerPort } = await testApp.start({ enableDebugger: true });
+
+    expect(pid).toBeDefined();
+    expect(port).toBeDefined();
+    expect(appServerPort).toBeDefined();
+    serverPort = appServerPort!;
+
+    await debuggerHelper.connectToDebugger(port);
   });
 
   afterEach(async () => {
@@ -28,19 +39,7 @@ describe("MCP Chrome Debugger Protocol - TS Logpoint Check", () => {
     await mcpClient.disconnect();
   });
 
-  it("should set TS logpoints and capture interpolated output (fib/sum and count)", async () => {
-    const { pid, port, serverPort } = await testApp.start({ enableDebugger: true });
-
-    expect(pid).toBeDefined();
-    expect(port).toBeDefined();
-    expect(serverPort).toBeDefined();
-
-    await debuggerHelper.connectToDebugger(port);
-
-    // Use absolute path to TS source (Variant C - TS-first)
-    const tsSourcePath = path.resolve(__dirname, "../fixtures/test-app/src/index.ts");
-
-    // Scenario A: fib/sum
+  it("captures fib/sum logpoint with interpolated vars at index.ts:96", async () => {
     await mcpClient.callTool("clearLogpointHits");
 
     const setA = await mcpClient.callTool("setBreakpoints", {
@@ -74,12 +73,12 @@ describe("MCP Chrome Debugger Protocol - TS Logpoint Check", () => {
     expect(msgA).toBeDefined();
     expect(msgA).toContain("fib=5");
     expect(msgA).toContain("sum=15");
-    // Also ensure vars include both expressions
     expect(payloadA?.vars).toBeDefined();
     expect(Object.prototype.hasOwnProperty.call(payloadA?.vars ?? {}, 'fibResult')).toBe(true);
     expect(Object.prototype.hasOwnProperty.call(payloadA?.vars ?? {}, 'breakpointResult')).toBe(true);
+  }, 60000);
 
-    // Scenario B: count
+  it("captures method-call logpoint with vars at index.ts:92", async () => {
     await mcpClient.callTool("clearLogpointHits");
 
     const setB = await mcpClient.callTool("setBreakpoints", {
@@ -111,10 +110,10 @@ describe("MCP Chrome Debugger Protocol - TS Logpoint Check", () => {
 
     expect(msgB).toBeDefined();
     expect(msgB).toMatch(/count=\d+/);
-    // Vars should include the expression key used
     expect(Object.prototype.hasOwnProperty.call(payloadB?.vars ?? {}, 'processor.getProcessCount()')).toBe(true);
+  }, 60000);
 
-    // Optional: Fallback B mapping without sourceMapPaths using originalSourcePath
+  it("resolves generated position for src/index.ts via originalSourcePath fallback", async () => {
     const mapRes = await mcpClient.callTool("resolveGeneratedPosition", {
       originalSource: "src/index.ts",
       originalSourcePath: tsSourcePath,

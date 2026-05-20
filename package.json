@@ -28,6 +28,7 @@
     "bench": "NODE_OPTIONS='--max-old-space-size=1024' vitest bench --run",
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
     "lint:fix": "eslint . --fix --cache --cache-location node_modules/.cache/eslint/",
+    "format": "npm run lint:fix",
     "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm audit --omit=dev --audit-level=high && npm run build"
   },
   "author": "Vitaly Ostanin <vitaly.ostanin@gmail.com>",

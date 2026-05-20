@@ -3,6 +3,7 @@ import { setTimeout } from "node:timers/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import safeStringify from "safe-stable-stringify";
+import { DomainError } from "./errors.js";
 
 /**
  * Wire-format envelope for every MCP tool response. The single `text` chunk
@@ -77,7 +78,7 @@ export function createErrorResponse(
   return {
     content: [{
       type: "text",
-      text: JSON.stringify(response),
+      text: safeStringify(response),
     }],
   };
 }
@@ -96,7 +97,7 @@ export function createSuccessResponse<T>(data: T): MCPResponse {
   return {
     content: [{
       type: "text",
-      text: JSON.stringify(response),
+      text: safeStringify(response),
     }],
   };
 }
@@ -146,10 +147,15 @@ export async function withErrorHandling<T>(
 
     return createSuccessResponse(result);
   } catch (error) {
+    // Domain errors carry their own MCP code so the client can branch on
+    // failure kind (NOT_FOUND vs NOT_CONNECTED vs PROTOCOL_ERROR vs ...) without
+    // parsing the message. Plain Errors fall back to the generic code.
+    const code = error instanceof DomainError ? error.code : 'OPERATION_FAILED';
+
     return createErrorResponse(
       `Failed to ${context.operation}`,
       errorMessage(error),
-      'OPERATION_FAILED',
+      code,
       redactSensitiveContext(context),
     );
   }
@@ -160,6 +166,35 @@ export async function withErrorHandling<T>(
  * setTimeout so callers do not have to remember the import path.
  */
 export const sleep = setTimeout;
+
+/**
+ * Like `Promise.all(items.map(fn))`, but caps the number of `fn` invocations
+ * in flight at `limit`. Preserves input order in the returned array so the
+ * caller can index back by the original position (matches Promise.all
+ * semantics). Used on hot paths like `setBreakpoints` where unbounded
+ * parallelism would saturate downstream CDP roundtrips.
+ */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (limit <= 0) {
+    throw new Error(`mapWithConcurrency: limit must be > 0, got ${limit}`);
+  }
+
+  const results: R[] = new Array<R>(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (let index = cursor++; index < items.length; index = cursor++) {
+      results[index] = await fn(items[index]!, index);
+    }
+  });
+
+  await Promise.all(workers);
+
+  return results;
+}
 
 /**
  * Walk up from `startDir` looking for a `package.json`. Returns the directory

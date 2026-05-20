@@ -13,6 +13,7 @@
 - **Use modern ES features** - prefer const/let over var, arrow functions, async/await, destructuring, optional chaining, nullish coalescing
 - **Use Node.js built-in promise-based APIs** - prefer `node:timers/promises` over setTimeout, `node:fs/promises` over callback fs methods
 - **ABSOLUTELY MANDATORY: Use modern Promise-based timers with async/await** - always use `import { setTimeout } from "node:timers/promises"` and async/await patterns instead of callback-based setTimeout
+- **ABSOLUTELY MANDATORY: NEVER use `JSON.stringify` in `src/*` - use the safe version (`safe-stable-stringify`)** - `import safeStringify from "safe-stable-stringify"` and call `safeStringify(value)` everywhere. The safe version handles circular references, gives deterministic key order, and matches the project's wire-format guarantees. This rule applies to cache keys, log messages, MCP wire format, and any other serialization. The only allowed exception is template strings that are injected into the debuggee runtime via CDP `Runtime.evaluate` (where safe-stable-stringify is not available); document such exceptions inline. `JSON.parse` remains allowed for incoming JSON.
 - **Follow ESLint rules strictly** - write code that passes linting without warnings, use `??` instead of `||`, avoid unused variables, prefer explicit types
 
 ## Project Structure

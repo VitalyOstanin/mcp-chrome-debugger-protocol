@@ -3,7 +3,7 @@ import { MCPClient } from "../utils/mcp-client";
 import { TestAppManager } from "../utils/test-app-manager";
 import { DebuggerTestHelper } from "../utils/debugger-test-helper";
 import { unwrapToolPayload, waitForLogpoint } from "../utils/wait-helpers";
-import path from "path";
+import path from "node:path";
 import { setTimeout } from "node:timers/promises";
 
 // Types for breakpoint responses
@@ -218,11 +218,13 @@ describe("MCP Chrome Debugger Protocol - Breakpoint Tests", () => {
       await mcpClient.callTool("clearLogpointHits");
 
       // Place logpoint on a line that always executes when /test1 hits processData()
-      // In compiled JS, line 32 is: const count = this.data.length;
+      // In compiled JS (target ES2022, native class fields), line 30 is the
+      // `let sum = ...` initialiser inside processData() -- runs on every call,
+      // regardless of whether this.data is empty.
       const result = await mcpClient.callTool("setBreakpoints", {
         source: { path: mainScriptPath },
         breakpoints: [{
-          line: 32, // Always executed in processData()
+          line: 30, // Always executed in processData()
           column: 1,
           logMessage: "Processing data count: {this.data.length}, process count: {this.processCount}",
         }],

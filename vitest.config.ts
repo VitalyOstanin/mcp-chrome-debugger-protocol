@@ -21,11 +21,15 @@ export default defineConfig({
         '**/*.test.ts',
         '**/*.spec.ts',
       ],
-      // Floors fix the current unit-coverage baseline so a future refactor
-      // cannot silently drop it. Per-file overrides protect modules that are
-      // already well covered. Raise the global numbers as integration-style
-      // logic gets unit tests; integration coverage is uploaded separately via
-      // the c8 + NODE_V8_COVERAGE pipeline in .github/workflows/node.js.yml.
+      // Global floors are INTENTIONALLY LOW (10-11%). Real coverage is split
+      // between two pipelines: unit tests (this config) cover the helpers
+      // listed in the per-file overrides below; everything else runs inside
+      // a spawned MCP server / debuggee process and is measured by the
+      // integration coverage harness (c8 + NODE_V8_COVERAGE, see
+      // .github/workflows/node.js.yml). So a healthy unit-only run will
+      // legitimately show ~10% line coverage globally — the per-file numbers
+      // are the meaningful gates. Raise the globals only if real unit tests
+      // are added for the spawned-process modules.
       //
       // Numbers below match the actual unit-test baseline minus a 1pp buffer
       // so transient fluctuations (e.g. a small refactor changing a branch

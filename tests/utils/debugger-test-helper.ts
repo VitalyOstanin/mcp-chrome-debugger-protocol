@@ -1,22 +1,13 @@
+import { setTimeout as sleep } from "node:timers/promises";
+import type { DebugProtocol } from "@vscode/debugprotocol";
 import type { MCPClient } from "./mcp-client";
 import type { TestAppManager } from "./test-app-manager";
 
-export interface ScriptInfo {
-  scriptId: string;
-  url: string;
-  lineCount?: number | undefined;
-}
-
-export interface BreakpointInfo {
-  id: number;
-  verified: boolean;
-  line: number;
-  column?: number | undefined;
-  source?: {
-    name: string;
-    path: string;
-  };
-}
+// Use the official DAP Breakpoint shape so test code stays aligned with the
+// server response. The previous local BreakpointInfo duplicated a subset of
+// DebugProtocol.Breakpoint. We narrow id to required because our adapter is
+// contracted to always assign one — tests then can use `bp.id` without `!`.
+export type BreakpointInfo = DebugProtocol.Breakpoint & { id: number };
 
 interface PendingBreakpoint {
   id?: number | undefined;
@@ -70,6 +61,8 @@ export class DebuggerTestHelper {
       const returned: BreakpointInfo[] = data.breakpoints ?? [];
 
       // Update id mapping and refresh internal state with server-assigned ids.
+      // BreakpointInfo narrows DebugProtocol.Breakpoint.id to required because
+      // our adapter contractually always assigns one — see type alias above.
       for (let i = 0; i < returned.length; i++) {
         const local = list[i]!;
         const remote = returned[i]!;
@@ -89,42 +82,39 @@ export class DebuggerTestHelper {
 
     if (port && port !== 9229) {
       // For custom ports, we need to use attach as the debugger is already running
-      // on the specified port from the --inspect=port flag at startup
-      // First, we need to get the WebSocket URL from the debugging target list
+      // on the specified port from the --inspect=port flag at startup.
+      // First, verify the debugging target list is reachable. We use Node's
+      // built-in fetch (>=18) with AbortController so the call matches the
+      // rest of the project (scripts/mcp-logpoint-check.mjs uses fetch too)
+      // and we no longer keep a duplicated http.get probe locally.
+      const targetListUrl = `http://127.0.0.1:${port}/json/list`;
+      const controller = new AbortController();
+      const timer = setTimeout(() => { controller.abort(); }, 5000);
+
       try {
-        const http = await import('http');
-        const targetListUrl = `http://127.0.0.1:${port}/json/list`;
-        // Get the debugging targets
-        const response = await new Promise<string>((resolve, reject) => {
-          const req = http.get(targetListUrl, (res) => {
-            let data = '';
+        const probe = await fetch(targetListUrl, { signal: controller.signal });
 
-            res.on('data', (chunk) => data += chunk);
-            res.on('end', () => { resolve(data); });
-          });
+        if (!probe.ok) {
+          throw new Error(`Inspector target list returned HTTP ${probe.status}`);
+        }
 
-          req.on('error', reject);
-          req.setTimeout(5000, () => {
-            req.destroy();
-            reject(new Error('Request timeout'));
-          });
-        });
-        const targets = JSON.parse(response);
+        const targets = await probe.json() as Array<{ webSocketDebuggerUrl?: string }>;
 
         if (targets.length === 0) {
           throw new Error('No debugging targets found');
         }
-
-        // Use the first available target's WebSocket URL
-        const webSocketUrl = targets[0]!.webSocketDebuggerUrl;
-
-        if (!webSocketUrl) {
+        if (!targets[0]?.webSocketDebuggerUrl) {
           throw new Error('No WebSocket debugger URL found');
         }
 
         result = await this.mcpClient.callTool("attach", { address: "localhost", port });
       } catch (error) {
-        throw new Error(`Failed to connect to debugger on port ${port}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+        throw new Error(
+          `Failed to connect to debugger on port ${port}: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      } finally {
+        clearTimeout(timer);
       }
     } else if (port === 9229) {
       // For default port, use connect_default
@@ -340,32 +330,23 @@ export class DebuggerTestHelper {
   }
 
   async waitForPause(timeout: number = 5000): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const startTime = Date.now();
-      const checkPause = async () => {
-        if (Date.now() - startTime > timeout) {
-          reject(new Error("Timeout waiting for pause"));
+    const deadline = Date.now() + timeout;
 
+    while (Date.now() <= deadline) {
+      try {
+        const callStack = await this.getCallStack();
+
+        if (callStack.length > 0) {
           return;
         }
+      } catch {
+        // getCallStack rejects while the inspector is still warming up; keep polling.
+      }
 
-        try {
-          const callStack = await this.getCallStack();
+      await sleep(100);
+    }
 
-          if (callStack.length > 0) {
-            resolve();
-
-            return;
-          }
-        } catch {
-          // Continue checking
-        }
-
-        setTimeout(checkPause, 100);
-      };
-
-      checkPause();
-    });
+    throw new Error("Timeout waiting for pause");
   }
 
   async triggerTestSignal(): Promise<void> {

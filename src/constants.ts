@@ -31,6 +31,25 @@ export const DEFAULTS = {
   // Polling for scriptParsed in NodeJSDebugAdapter.getScriptIdForPath.
   SCRIPT_LOOKUP_POLL_INTERVAL_MS: 50,
   SCRIPT_LOOKUP_DEFAULT_TIMEOUT_MS: 1_000,
+  // Extended script-lookup deadline used by placeBreakpointByScriptId: a
+  // freshly set breakpoint may race the scriptParsed event for a slow module,
+  // and the longer window cuts down on "script not loaded yet" flakes without
+  // blocking common-case fast paths (which still resolve in <100ms).
+  BREAKPOINT_SCRIPT_LOOKUP_TIMEOUT_MS: 2_000,
+  // Short script-lookup deadline used by the synchronous breakpointLocations
+  // tool: callers expect a quick "what columns can I break on" answer and
+  // shouldn't pay the full default budget for a missing script.
+  BREAKPOINT_LOCATIONS_LOOKUP_TIMEOUT_MS: 200,
+  // Built-in default for DAPClient.probeInspector when caller does not pass
+  // probeTimeoutMs. Distinct from PROBE_TIMEOUT_MS (used by the higher-level
+  // poll loop) so changing one doesn't surprise the other.
+  PROBE_INSPECTOR_DEFAULT_TIMEOUT_MS: 500,
+  // Concurrency cap for placeSingleBreakpoint() during setBreakpoints. With N
+  // breakpoints in a file we'd otherwise fire N parallel getPossibleBreakpoints
+  // + setBreakpoint CDP roundtrips, which both stresses the inspector loop and
+  // raises the chance of races on the same scriptId. 8 keeps parallelism useful
+  // while bounding peak in-flight CDP requests.
+  SET_BREAKPOINTS_CONCURRENCY: 8,
 } as const;
 
 // V8 inspector exposes the host JS thread as a single DAP thread; the adapter

@@ -32,6 +32,8 @@ The project uses **automated CI/CD via GitHub Actions** for releases:
 - **CI workflow** (`.github/workflows/node.js.yml`) — runs lint, typecheck, build, unit and integration tests on every push and PR to `master`.
 - **Publish workflow** (`.github/workflows/npm-publish.yml`) — runs the same gates plus a smoke pack-and-install, then publishes to npm with provenance and creates a GitHub Release. Triggered by pushing a tag matching `v*`.
 
+> The project ships as an npm package, not a hosted service. Server-side deployment patterns (rolling update, blue/green, canary) do not apply; pre-release semver tags (`-rc.N`) and `npm deprecate` + a patch release cover staged rollout and rollback respectively (see [Rollback](#rollback) below).
+
 **Quick Release (TL;DR):**
 
 ```bash
@@ -111,6 +113,8 @@ npm version major    # 1.6.1 → 2.0.0
 ```
 
 `npm version` automatically updates `package.json` and `package-lock.json`, creates a commit, and creates an **annotated** git tag. **Always use `npm version`** instead of manual `git tag` — lightweight tags lose authorship/date metadata and break `git push --follow-tags`.
+
+**Historical note (not actionable):** The tags `v1.0.0`, `v1.0.1`, `v1.1.0`, and `v1.3.0` predate this rule and were created as lightweight tags. They are intentionally **not** re-tagged: rewriting a published tag would force-push the ref and could surprise consumers that pin against it (npm tarballs are not affected because they resolve by commit SHA, but GitHub UI links, `git describe`, and downstream tooling cached state can drift). Newer tags from `v1.1.1` onward (and the restored `v1.2.0`) are annotated. Treat the gap as known and do not attempt a retroactive fix unless there's an explicit need.
 
 ### 2. Lock File Update
 

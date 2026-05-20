@@ -4,8 +4,9 @@ import type { DebugProtocol } from '@vscode/debugprotocol';
 import { NodeJSDebugAdapter, type NodeJSLaunchRequestArguments, type NodeJSAttachRequestArguments } from './nodejs-debug-adapter.js';
 import type { LogpointHit, DebuggerEvent, TrackedBreakpoint } from './types.js';
 import { createSuccessResponse, createErrorResponse, errorMessage, type MCPResponse } from './utils.js';
+import { NotConnectedError, ProtocolError, ValidationError } from './errors.js';
 import { DEFAULTS, INSPECTOR_PORT_RANGE } from './constants.js';
-import { logVerbose } from './logger.js';
+import { logVerbose, logError } from './logger.js';
 import { kill } from 'node:process';
 import { spawn } from 'node:child_process';
 import { setTimeout as scheduleTimeout } from 'node:timers';
@@ -310,7 +311,7 @@ export class DAPClient extends EventEmitter {
       const attachResult = await adapter.attach(params as NodeJSAttachRequestArguments);
 
       if (!attachResult.success) {
-        throw new Error(attachResult.message ?? 'Attach failed');
+        throw new ProtocolError(attachResult.message ?? 'Attach failed');
       }
 
       this.connection.isConnected = true;
@@ -397,20 +398,26 @@ export class DAPClient extends EventEmitter {
           const {adapter} = this.connection;
 
           if (!adapter) {
-            throw new Error('Debug adapter not available');
+            throw new NotConnectedError('Debug adapter not available');
           }
 
           const handler = this.dapHandlers[method];
 
           if (!handler) {
-            throw new Error(`Unsupported DAP method: ${method}`);
+            throw new ValidationError(`Unsupported DAP method: ${method}`);
           }
 
           const response = await handler(adapter, params, requestId);
 
           this.resolveRequest(requestId, response);
         } catch (error) {
-          this.rejectRequest(requestId, error instanceof Error ? error : new Error(String(error)));
+          // Preserve the original cause when wrapping non-Error throwables so
+          // the downstream consumer (DAP request promise) can still walk the
+          // chain via err.cause.
+          this.rejectRequest(
+            requestId,
+            error instanceof Error ? error : new Error(String(error), { cause: error }),
+          );
         }
       })();
     });
@@ -462,7 +469,7 @@ export class DAPClient extends EventEmitter {
   ): Promise<DebugProtocol.LaunchResponse> {
     void requestId;
     void args;
-    throw new Error(
+    throw new ValidationError(
       'launch is not supported by this MCP server; start your Node.js process with ' +
       '--inspect-brk and use the attach tool instead',
     );
@@ -509,11 +516,23 @@ export class DAPClient extends EventEmitter {
       if (parsed.hostname) {
         address = parsed.hostname;
       }
-    } catch {
-      // Fallback for inputs that aren't a full URL: pull just the port out of ":NNNN".
-      const match = url.match(/:(\d+)/);
+    } catch (cause) {
+      // Pull only :NNNN that sits at the very end of the string (or right before
+      // a trailing path), so that arbitrary substrings like "Error 2025:34:56"
+      // don't get silently misread as port 34. If even that fails, surface a
+      // structured error so the MCP caller sees a clear "bad URL" instead of
+      // being silently attached to the default inspector port.
+      const match = url.match(/:(\d+)(?:\/.*)?$/);
 
-      if (match?.[1]) port = parseInt(match[1], 10);
+      if (!match?.[1]) {
+        return createErrorResponse(
+          'Failed to attach',
+          `connectUrl: not a valid URL or :PORT suffix: ${url}`,
+          'VALIDATION_ERROR',
+          { url, cause: errorMessage(cause) },
+        );
+      }
+      port = parseInt(match[1], 10);
     }
 
     return this.attachToProcess({ port, ...(address !== undefined && { address }) });
@@ -551,7 +570,10 @@ export class DAPClient extends EventEmitter {
   }
 
   // Probe Node inspector's /json/version endpoint to verify a port is live.
-  private probeInspector(probePort: number, timeoutMs = 500): Promise<boolean> {
+  private probeInspector(
+    probePort: number,
+    timeoutMs: number = DEFAULTS.PROBE_INSPECTOR_DEFAULT_TIMEOUT_MS,
+  ): Promise<boolean> {
     return new Promise((resolve) => {
       const req = http.get(
         { host: '127.0.0.1', port: probePort, path: '/json/version', timeout: timeoutMs },
@@ -692,6 +714,14 @@ export class DAPClient extends EventEmitter {
     }
 
     const debug = { activation, detectedPort, webSocketUrl: this.webSocketUrl };
+
+    // Arrays are "object" too, but spreading them into createSuccessResponse
+    // would emit numeric-index keys; attach is expected to be an object
+    // envelope, so surface the raw result unchanged when the contract drifts.
+    if (Array.isArray(parsed)) {
+      return attachResult;
+    }
+
     const isRecord = typeof parsed === 'object' && parsed !== null;
     const payload = isRecord ? (parsed as Record<string, unknown>) : { value: parsed };
 
@@ -871,10 +901,11 @@ export class DAPClient extends EventEmitter {
         // in dapHandlers, and routing through sendRequest would just throw and
         // skip the actual cleanup of cdpTransport / nodeProcess.
         await this.connection.adapter.disconnect();
-      } catch {
+      } catch (error) {
         // disconnect() is best-effort cleanup; the adapter may already be torn
-        // down from a debuggee crash. We still null out connection.adapter
-        // below so subsequent attaches start from a clean slate.
+        // down from a debuggee crash. Log so an unexpected cleanup failure
+        // (not "debuggee is gone") leaves a breadcrumb instead of vanishing.
+        logError('Adapter disconnect failed during cleanup (best-effort)', error);
       }
 
       this.connection.adapter = null;
@@ -902,12 +933,28 @@ export class DAPClient extends EventEmitter {
     return Array.from(this.trackedBreakpoints.values());
   }
 
+  // O(1) lookup for the common "find one tracked breakpoint by its DAP id"
+  // pattern. Manager.removeBreakpoint used to materialize the whole Map into
+  // an array and then .find() — now it goes straight to Map.get().
+  getTrackedBreakpoint(breakpointId: number): TrackedBreakpoint | undefined {
+    return this.trackedBreakpoints.get(breakpointId);
+  }
+
+  /**
+   * Per-CDP-event-type tally of swallowed handler errors, forwarded from the
+   * adapter so getDebuggerState can surface "silent" regressions without the
+   * caller having to know that the adapter exists.
+   */
+  getAdapterEventErrorCounts(): Record<string, number> {
+    return this.connection.adapter?.getEventErrorCounts() ?? {};
+  }
+
   // Removes one breakpoint at the adapter level by DAP id without touching siblings.
   // Manager.removeBreakpoint goes through here instead of using setBreakpoints with an
   // empty list, which used to wipe every breakpoint in the same source file.
   async removeBreakpointByDapId(dapId: number): Promise<{ removed: boolean; filePath?: string }> {
     if (!this.connection.adapter) {
-      throw new Error('Not connected to debug adapter');
+      throw new NotConnectedError('Not connected to debug adapter');
     }
 
     return this.connection.adapter.removeBreakpointByDapId(dapId);
