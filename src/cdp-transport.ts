@@ -34,54 +34,50 @@ export class CDPTransport extends EventEmitter {
   }
 
   async connect(): Promise<CDPConnection> {
-    try {
-      // Get available targets from Node.js inspector
-      const targets = await CDP.List({
-        host: this.options.host,
-        port: this.options.port,
-      });
+    // Critical path: failures propagate via throw only. Previously this method
+    // also called this.emit('error', error) before re-throwing, which double-
+    // logged every connect failure (once via the OutputEvent subscriber, once
+    // via the caller's withErrorHandling) and risked unhandledRejection if no
+    // subscriber was attached yet.
+    const targets = await CDP.List({
+      host: this.options.host,
+      port: this.options.port,
+    });
 
-      if (targets.length === 0) {
-        throw new Error('No debuggable targets found');
-      }
-
-      // Select target - use first if no selector provided
-      let selectedTarget: CDP.Target;
-
-      if (typeof this.options.target === 'function') {
-        selectedTarget = this.options.target(targets);
-      } else if (typeof this.options.target === 'string') {
-        const found = targets.find(t => t.id === this.options.target);
-
-        if (!found) {
-          throw new Error(`Target with ID ${this.options.target} not found`);
-        }
-        selectedTarget = found;
-      } else {
-        selectedTarget = targets[0]!;
-      }
-
-      // Create CDP client connection
-      this.client = await CDP({
-        host: this.options.host,
-        port: this.options.port,
-        target: selectedTarget.webSocketDebuggerUrl,
-      });
-
-      this.target = selectedTarget;
-      this.isConnected = true;
-      this.reconnectAttempts = 0;
-
-      // Set up event forwarding
-      this.setupEventForwarding();
-
-      this.emit('connected', { client: this.client, target: this.target });
-
-      return { client: this.client, target: this.target };
-    } catch (error) {
-      this.emit('error', error);
-      throw error;
+    if (targets.length === 0) {
+      throw new Error('No debuggable targets found');
     }
+
+    let selectedTarget: CDP.Target;
+
+    if (typeof this.options.target === 'function') {
+      selectedTarget = this.options.target(targets);
+    } else if (typeof this.options.target === 'string') {
+      const found = targets.find(t => t.id === this.options.target);
+
+      if (!found) {
+        throw new Error(`Target with ID ${this.options.target} not found`);
+      }
+      selectedTarget = found;
+    } else {
+      selectedTarget = targets[0]!;
+    }
+
+    this.client = await CDP({
+      host: this.options.host,
+      port: this.options.port,
+      target: selectedTarget.webSocketDebuggerUrl,
+    });
+
+    this.target = selectedTarget;
+    this.isConnected = true;
+    this.reconnectAttempts = 0;
+
+    this.setupEventForwarding();
+
+    this.emit('connected', { client: this.client, target: this.target });
+
+    return { client: this.client, target: this.target };
   }
 
   private setupEventForwarding(): void {
@@ -140,8 +136,9 @@ export class CDPTransport extends EventEmitter {
           await (this.client[enableMethod] as () => Promise<void>)();
         }
       } catch (error) {
-        this.emit('error', new Error(`Failed to enable domain ${domain}: ${errorMessage(error)}`));
-        throw error;
+        // Critical path: throw only. Same rationale as connect() -- a parallel
+        // emit('error', ...) doubles up log lines for a single failure.
+        throw new Error(`Failed to enable domain ${domain}: ${errorMessage(error)}`, { cause: error });
       }
     }
   }
@@ -151,15 +148,13 @@ export class CDPTransport extends EventEmitter {
       throw new Error('CDP client not connected');
     }
 
-    try {
-      // Use CDP client's generic send method
-      const result = await this.client.send(method as keyof ProtocolMappingApi.Commands, params);
+    // Critical path: throw only. The parallel emit('error', ...) used to
+    // double-log every CDP send failure via the OutputEvent subscriber on
+    // top of the rejection seen by the caller. Callers that need to log
+    // failures already do so via withErrorHandling or sendErrorResponse.
+    const result = await this.client.send(method as keyof ProtocolMappingApi.Commands, params);
 
-      return result as T;
-    } catch (error) {
-      this.emit('error', error);
-      throw error;
-    }
+    return result as T;
   }
 
   getClient(): CDP.Client | null {

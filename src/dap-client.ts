@@ -688,7 +688,9 @@ export class DAPClient extends EventEmitter {
     } catch (error) {
       return createErrorResponse(
         'Failed to enable debugger',
-        JSON.stringify({ pid, error: errorMessage(error) }),
+        errorMessage(error),
+        'DEBUGGER_ENABLE_FAILED',
+        { pid },
       );
     }
   }
@@ -747,7 +749,12 @@ export class DAPClient extends EventEmitter {
     } catch (error) {
       return createErrorResponse(
         'Failed to attach to process',
-        JSON.stringify({ error: errorMessage(error) }),
+        errorMessage(error),
+        'ATTACH_FAILED',
+        {
+          port: args.port ?? DEFAULTS.INSPECTOR_PORT,
+          address: args.address ?? DEFAULTS.INSPECTOR_CLIENT_HOST,
+        },
       );
     }
   }

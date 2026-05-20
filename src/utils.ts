@@ -101,12 +101,41 @@ export function createSuccessResponse<T>(data: T): MCPResponse {
   };
 }
 
+// Context keys whose values may carry user-authored expressions / values that
+// could contain secrets (e.g. evaluate("process.env.API_KEY"), setVariable
+// receiving a secret literal). Redact them when echoing the context into
+// ErrorResponse.details so a thrown evaluation does not surface the original
+// source string verbatim back to the MCP client logs.
+const SENSITIVE_DETAIL_KEYS = new Set([
+  'expression',
+  'value',
+  'condition',
+  'logMessage',
+]);
+
+function redactSensitiveContext(
+  context: Record<string, unknown>,
+): Record<string, unknown> {
+  const redacted: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(context)) {
+    if (SENSITIVE_DETAIL_KEYS.has(key) && typeof value === 'string') {
+      redacted[key] = `[redacted: ${value.length} chars]`;
+    } else {
+      redacted[key] = value;
+    }
+  }
+
+  return redacted;
+}
+
 /**
  * Run `operation` and convert the outcome to an MCPResponse: a SuccessResponse
  * wrapping its return value, or an ErrorResponse with code `OPERATION_FAILED`
  * and `details = context` carrying both operation name and any extra fields the
- * caller passed in. Use this for every tool handler so error wrapping is
- * uniform across the server.
+ * caller passed in (sensitive fields like `expression` / `value` are redacted
+ * to a `[redacted: N chars]` placeholder before they reach the client). Use
+ * this for every tool handler so error wrapping is uniform across the server.
  */
 export async function withErrorHandling<T>(
   operation: () => Promise<T>,
@@ -121,7 +150,7 @@ export async function withErrorHandling<T>(
       `Failed to ${context.operation}`,
       errorMessage(error),
       'OPERATION_FAILED',
-      context,
+      redactSensitiveContext(context),
     );
   }
 }
