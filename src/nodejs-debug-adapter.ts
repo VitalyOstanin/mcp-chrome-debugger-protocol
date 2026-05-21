@@ -510,6 +510,14 @@ export class NodeJSDebugAdapter extends DebugSession {
       this.sendEvent(new TerminatedEvent());
     });
 
+    // Per-attach setup (enableDomains, Runtime.addBinding) lives on the CDP
+    // client object; after reconnect the client is replaced and that setup
+    // must run again, otherwise logpoints stop delivering bindingCalled
+    // because no binding is registered on the new client.
+    this.cdpTransport.on("reconnected", () => {
+      void this.handleCDPReconnected();
+    });
+
     this.cdpTransport.on("error", (error: Error) => {
       this.sendEvent(new OutputEvent(`CDP Error: ${error.message}\n`, "stderr"));
     });
@@ -517,6 +525,34 @@ export class NodeJSDebugAdapter extends DebugSession {
     this.cdpTransport.on("cdp-event", (event: { method: string; params: unknown }) => {
       this.handleCDPEvent(event);
     });
+  }
+
+  private async handleCDPReconnected(): Promise<void> {
+    if (!this.cdpTransport) return;
+
+    try {
+      await this.cdpTransport.enableDomains(["Runtime", "Debugger", "Console", "Profiler"]);
+    } catch (error) {
+      this.bumpEventErrorCount("reconnect.enableDomains");
+      this.diagnostic(`enableDomains after reconnect failed: ${errorMessage(error)}`);
+    }
+
+    try {
+      await this.cdpTransport.sendCommand(
+        "Runtime.addBinding",
+        { name: "__mcpLogPoint" },
+      );
+    } catch (error) {
+      this.bumpEventErrorCount("reconnect.addBinding");
+      this.sendEvent(
+        new OutputEvent(
+          `Failed to reinstall Runtime.addBinding after reconnect: ${
+            errorMessage(error)
+          }\n`,
+          "console",
+        ),
+      );
+    }
   }
 
   private handleCDPEvent(event: { method: string; params: unknown }): void {

@@ -110,6 +110,11 @@ export class CDPTransport extends EventEmitter {
       try {
         await setTimeout(this.reconnectDelay * this.reconnectAttempts);
         await this.connect();
+        // Distinct from the initial 'connected' event: subscribers that need
+        // to re-issue per-attach CDP setup (Runtime.addBinding, enableDomains
+        // beyond what setupEventForwarding wires up) listen here. The fresh
+        // client has no inherited state from the previous session.
+        this.emit('reconnected');
 
         return;
       } catch (error) {
