@@ -38,13 +38,25 @@ export function extractLogpointPlaceholders(message: string): string[] {
  */
 export function buildLogpointExpression(logMessage: string): string {
   const exprs = extractLogpointPlaceholders(logMessage);
-  const varsEntries = exprs.map((expr) => {
-    const key = expr.replace(/"/g, '\\"');
-
+  // Internal __vars object is keyed by positional identifier (__v0, __v1...)
+  // so the JS lookups embedded into the template literal never have to escape
+  // user-controlled expression text. The previous design used the raw expr as
+  // a JS string key and applied a quotes-only replace() that did not handle
+  // backslashes -- crafted text like `a\\"; throw` could close the string and
+  // inject code. Positional keys eliminate that class of bug entirely.
+  const varsEntries = exprs.map((expr, i) => {
     // IIFE with try/catch guards ReferenceErrors and other runtime failures so
     // a single broken placeholder does not silently kill the whole logpoint.
-    return `"${key}":(()=>{try{return ${expr}}catch(_){return undefined}})()`;
+    return `__v${i}:(()=>{try{return ${expr}}catch(_){return undefined}})()`;
   }).join(',');
+  // Wire format preserves the expr-keyed `vars` shape that downstream consumers
+  // expect. The expression text is embedded into the generated JS through
+  // JSON.stringify at build time -- JSON strings are a strict subset of JS
+  // strings, so this is safe for any input (quotes, backslashes, control
+  // chars, non-BMP) without hand-written escape rules.
+  const wireVarsEntries = exprs.map((expr, i) =>
+    `${JSON.stringify(expr)}:__vars.__v${i}`,
+  ).join(',');
   // Escaping order matters:
   //   1. backslash first  -- so subsequent passes don't double-escape inserted '\'
   //   2. backtick         -- closes the template literal we wrap below
@@ -52,17 +64,22 @@ export function buildLogpointExpression(logMessage: string): string {
   //                          a template interpolation by the runtime (the regex
   //                          below only handles bare "{...}" placeholders)
   //   4. {expr} placeholders -> "${...}" referring to the precomputed __vars map
+  //      via the positional key resolved from exprs.indexOf().
   const tpl = logMessage
     .replace(/\\/g, "\\\\")
     .replace(/`/g, "\\`")
     .replace(/\$/g, "\\$")
     .replace(PLACEHOLDER_RE, (_m, expr: string) => {
-      const key = expr.trim().replace(/"/g, '\\"');
+      const idx = exprs.indexOf(expr.trim());
 
-      return `\${typeof __vars["${key}"]==="object"?JSON.stringify(__vars["${key}"]):__vars["${key}"]}`;
+      // Empty / unrecognised placeholders drop out silently. extractLogpointPlaceholders
+      // already strips empty ones; this guards against any drift between the two regexes.
+      if (idx === -1) return '';
+
+      return `\${typeof __vars.__v${idx}==="object"?JSON.stringify(__vars.__v${idx}):__vars.__v${idx}}`;
     });
 
-  return `(()=>{try{const __vars={${varsEntries}};typeof __mcpLogPoint==='function'&&__mcpLogPoint(JSON.stringify({message:\`${tpl}\`,vars:__vars,time:Date.now()}))}catch(_){};return false})()`;
+  return `(()=>{try{const __vars={${varsEntries}};typeof __mcpLogPoint==='function'&&__mcpLogPoint(JSON.stringify({message:\`${tpl}\`,vars:{${wireVarsEntries}},time:Date.now()}))}catch(_){};return false})()`;
 }
 
 /**

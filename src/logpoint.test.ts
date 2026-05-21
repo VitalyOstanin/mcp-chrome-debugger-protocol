@@ -119,4 +119,16 @@ describe('buildLogpointExpression', () => {
 
     expect(ret).toBe(false);
   });
+
+  it('keeps internal lookup positional even when the placeholder expression contains quotes', () => {
+    // Regression: the previous design embedded the expr text as a JS string key
+    // in __vars[..] and used a quotes-only replace() that ignored backslashes.
+    // The positional-key design must not depend on any escape table.
+    const expr = buildLogpointExpression('value={a["k"]}');
+
+    // Source-level checks: no occurrence of the raw expression text inside a
+    // JS string lookup, and positional keys are used instead.
+    expect(expr).toContain('__v0');
+    expect(expr).not.toContain('__vars["a[\\"k\\"]"]');
+  });
 });
