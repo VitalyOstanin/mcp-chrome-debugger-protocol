@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { z } from 'zod';
+import safeStringify from 'safe-stable-stringify';
 import type { DebugProtocol } from '@vscode/debugprotocol';
 import { NodeJSDebugAdapter, type NodeJSLaunchRequestArguments, type NodeJSAttachRequestArguments } from './nodejs-debug-adapter.js';
 import type { LogpointHit, DebuggerEvent, TrackedBreakpoint } from './types.js';
@@ -206,16 +207,26 @@ export class DAPClient extends EventEmitter {
 
         try {
           parsed = JSON.parse(payloadRaw);
-          // Object: prefer the `message` field if present; fall back to a
-          // canonical JSON string. Array/scalar/null: stringify the value
-          // itself so `message` reflects the original payload instead of
-          // silently dropping it.
+          // Object with `message`: keep string values verbatim; serialize
+          // non-string values via safeStringify so structure is preserved
+          // (avoids "[object Object]" / "null" / Symbol throw). Other cases
+          // (object without message, array, scalar, null): use payloadRaw so
+          // arrays do not collapse to `arr.join(',')` and primitives keep
+          // their JSON form.
           if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
             const obj = parsed as Record<string, unknown>;
 
-            message = 'message' in obj ? String(obj.message) : payloadRaw;
+            if ('message' in obj) {
+              const messageValue = obj.message;
+
+              message = typeof messageValue === 'string'
+                ? messageValue
+                : (safeStringify(messageValue) ?? payloadRaw);
+            } else {
+              message = payloadRaw;
+            }
           } else {
-            message = String(parsed);
+            message = payloadRaw;
           }
         } catch {
           // not JSON
