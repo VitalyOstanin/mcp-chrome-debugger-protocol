@@ -17,12 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CDPTransport, type CDPConnection } from './cdp-transport.js';
 import type { Protocol } from 'devtools-protocol';
 import { SourceMapResolver, type SourceMapResolution } from './source-map-resolver.js';
-import {
-  buildLogpointExpression,
-  extractLogpointPlaceholders,
-  lookupDottedPath,
-  renderLogpointMessage,
-} from './logpoint.js';
+import { buildLogpointExpression } from './logpoint.js';
 import {
   BREAKPOINT_SEARCH_WINDOWS,
   DAP_ERROR_CODES,
@@ -1998,38 +1993,6 @@ export class NodeJSDebugAdapter extends DebugSession {
     this.lastException = null;
 
     return this.okResponse<DebugProtocol.RestartResponse>('restart');
-  }
-
-  // Method to simulate logpoint hit - would be called from DAP runtime events
-  public simulateLogpointHit(filePath: string, line: number, variables: Record<string, unknown>): void {
-    const breakpoints = this.breakpoints.get(filePath) ?? [];
-    // Use filter, not find — DAP allows multiple logpoints on the same line
-    // (different messages / conditions). Emitting only the first hit would
-    // silently drop the others.
-    const logpoints = breakpoints.filter((bp) => bp.line === line && bp.logMessage);
-
-    for (const logpoint of logpoints) {
-      if (!logpoint.logMessage) continue;
-
-      // Mirror the runtime path: extract the same placeholders, resolve them
-      // against the provided static variables map, then render the message via
-      // the shared helper so this path stays observationally consistent.
-      const exprs = extractLogpointPlaceholders(logpoint.logMessage);
-      const vars: Record<string, unknown> = {};
-
-      for (const expr of exprs) {
-        vars[expr] = lookupDottedPath(expr, variables);
-      }
-
-      const message = renderLogpointMessage(logpoint.logMessage, vars);
-      const payload = { message, vars, time: Date.now() };
-
-      this.sendEvent(new DAEvent('mcpLogpoint', {
-        executionContextId: 0,
-        name: '__mcpLogPoint',
-        payload: safeStringify(payload),
-      }));
-    }
   }
 
   // Public wrapper: disconnect

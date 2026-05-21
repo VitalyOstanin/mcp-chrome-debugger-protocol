@@ -1,9 +1,6 @@
-// Shared logpoint helpers used by both the live runtime path (binding-based) and
-// the simulated test path. Centralising them here removes a long-standing
-// duplication between createLogpointExpression and simulateLogpointHit and keeps
-// placeholder syntax consistent in one place.
-
-import safeStringify from "safe-stable-stringify";
+// Logpoint helpers used by the live runtime path (binding-based) inside
+// NodeJSDebugAdapter. Placeholder syntax is defined once here so the runtime
+// expression builder stays the single source of truth.
 
 const PLACEHOLDER_RE = /\{([^}]+)\}/g;
 
@@ -82,44 +79,3 @@ export function buildLogpointExpression(logMessage: string): string {
   return `(()=>{try{const __vars={${varsEntries}};typeof __mcpLogPoint==='function'&&__mcpLogPoint(JSON.stringify({message:\`${tpl}\`,vars:{${wireVarsEntries}},time:Date.now()}))}catch(_){};return false})()`;
 }
 
-/**
- * Render a logpoint message against a static variables map (no debuggee
- * involvement). Used by the simulated logpoint path in tests; mirrors the
- * runtime path so live and simulated paths stay observationally consistent.
- *
- * Object values are JSON-stringified (matching the runtime expression);
- * primitives are coerced via String().
- */
-export function renderLogpointMessage(logMessage: string, vars: Record<string, unknown>): string {
-  return logMessage.replace(PLACEHOLDER_RE, (_m, expression: string) => {
-    const key = expression.trim();
-    const val = vars[key];
-
-    if (val !== null && typeof val === 'object') {
-      // safe-stable-stringify handles cycles by returning '[Circular]' instead
-      // of throwing, which JSON.stringify can't do without a custom replacer.
-      return safeStringify(val);
-    }
-
-    return String(val);
-  });
-}
-
-/**
- * Resolve a dotted-path placeholder against a variables map without throwing.
- * Errors collapse to undefined, matching the runtime expression's try/catch
- * fallback. Used by the simulated path.
- */
-export function lookupDottedPath(expr: string, variables: Record<string, unknown>): unknown {
-  const parts = expr.split('.');
-
-  // Stop descent on scalar intermediates so {a.b.c} renders undefined the same
-  // way as optional chaining: `(0)['x']` is undefined in JS, but treating `0`
-  // like a Record still hides that the path broke at a scalar.
-  return parts.reduce<unknown>(
-    (acc, part) => (acc !== null && typeof acc === 'object'
-      ? (acc as Record<string, unknown>)[part]
-      : undefined),
-    variables,
-  );
-}

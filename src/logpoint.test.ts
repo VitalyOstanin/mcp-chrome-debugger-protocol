@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   buildLogpointExpression,
   extractLogpointPlaceholders,
-  lookupDottedPath,
-  renderLogpointMessage,
 } from './logpoint.js';
 
 describe('extractLogpointPlaceholders', () => {
@@ -21,42 +19,6 @@ describe('extractLogpointPlaceholders', () => {
 
   it('drops empty placeholders', () => {
     expect(extractLogpointPlaceholders('a {} b')).toEqual([]);
-  });
-});
-
-describe('renderLogpointMessage', () => {
-  it('substitutes primitives via String()', () => {
-    expect(renderLogpointMessage('id={n}', { n: 42 })).toBe('id=42');
-  });
-
-  it('JSON.stringifies object values', () => {
-    expect(renderLogpointMessage('user={user}', { user: { id: 1 } })).toBe('user={"id":1}');
-  });
-
-  it('renders undefined and null explicitly', () => {
-    expect(renderLogpointMessage('a={x} b={y}', { x: undefined, y: null })).toBe('a=undefined b=null');
-  });
-
-  it('keeps non-placeholder text unchanged', () => {
-    expect(renderLogpointMessage('hello world', {})).toBe('hello world');
-  });
-});
-
-describe('lookupDottedPath', () => {
-  it('returns top-level value', () => {
-    expect(lookupDottedPath('a', { a: 1 })).toBe(1);
-  });
-
-  it('walks nested objects', () => {
-    expect(lookupDottedPath('a.b.c', { a: { b: { c: 'x' } } })).toBe('x');
-  });
-
-  it('returns undefined when path is missing without throwing', () => {
-    expect(lookupDottedPath('a.b.c', { a: {} })).toBeUndefined();
-  });
-
-  it('returns undefined when traversing through null', () => {
-    expect(lookupDottedPath('a.b', { a: null })).toBeUndefined();
   });
 });
 
