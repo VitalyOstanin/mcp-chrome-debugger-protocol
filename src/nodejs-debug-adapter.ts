@@ -15,7 +15,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CDPTransport, type CDPConnection } from './cdp-transport.js';
 import type { Protocol } from 'devtools-protocol';
-import { SourceMapResolver } from './source-map-resolver.js';
+import { SourceMapResolver, type SourceMapResolution } from './source-map-resolver.js';
 import {
   buildLogpointExpression,
   extractLogpointPlaceholders,
@@ -51,6 +51,10 @@ function assignDapBreakpointFields(
 interface BreakpointPlacement {
   cdpResult: Protocol.Debugger.SetBreakpointByUrlResponse | null;
   reason?: string;
+  // Full source-map resolution captured during placement so DAPDebuggerManager
+  // does not have to re-run resolveSourceMapPosition for tracking metadata.
+  // Undefined when the source was not TS/TSX or resolution did not succeed.
+  sourceMapResolution?: SourceMapResolution;
 }
 
 export interface NodeJSLaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
@@ -98,6 +102,10 @@ export class NodeJSDebugAdapter extends DebugSession {
 
   private nodeProcess: ChildProcess | null = null;
   private readonly breakpoints = new Map<string, NodeJSRuntimeBreakpoint[]>();
+  // Resolution metadata keyed by DAP id, captured during placeSingleBreakpoint.
+  // Lets DAPDebuggerManager track the TS->JS hop without re-running the (cached
+  // but not free) resolveSourceMapPosition pass for every actual breakpoint.
+  private readonly breakpointSourceMapResolutions = new Map<number, SourceMapResolution>();
   private nextBreakpointId = 1;
   // In-memory tally of swallowed errors per CDP event type. We diagnostic() the
   // individual failures (visible only with DAP_VERBOSE=1), but the counter is
@@ -753,7 +761,12 @@ export class NodeJSDebugAdapter extends DebugSession {
     path: string,
     line: number,
     column: number,
-  ): Promise<{ targetPath: string; targetLine: number; targetColumn: number }> {
+  ): Promise<{
+    targetPath: string;
+    targetLine: number;
+    targetColumn: number;
+    sourceMapResolution?: SourceMapResolution;
+  }> {
     if (!/\.(ts|tsx|mts|cts)$/.test(path)) {
       return { targetPath: path, targetLine: line, targetColumn: column };
     }
@@ -768,6 +781,7 @@ export class NodeJSDebugAdapter extends DebugSession {
           targetPath: sourceMapResolution.targetFilePath,
           targetLine: sourceMapResolution.targetLineNumber,
           targetColumn: sourceMapResolution.targetColumnNumber,
+          sourceMapResolution,
         };
       }
     } catch (error) {
@@ -952,7 +966,8 @@ export class NodeJSDebugAdapter extends DebugSession {
       return { cdpResult: null, reason: 'CDP transport not available' };
     }
 
-    const { targetPath, targetLine, targetColumn } = await this.resolveTargetLocation(path, line, column);
+    const { targetPath, targetLine, targetColumn, sourceMapResolution } =
+      await this.resolveTargetLocation(path, line, column);
     // For logpoints, swap the user condition for the synthetic logpoint expression.
     const breakpointCondition = sourceBreakpoint.logMessage
       ? this.createLogpointExpression(sourceBreakpoint.logMessage)
@@ -963,12 +978,16 @@ export class NodeJSDebugAdapter extends DebugSession {
       return {
         cdpResult: scriptIdResult.cdpResult,
         ...(scriptIdResult.reason !== undefined ? { reason: scriptIdResult.reason } : {}),
+        ...(sourceMapResolution !== undefined ? { sourceMapResolution } : {}),
       };
     }
 
     const urlResult = await this.placeBreakpointByUrl(targetPath, targetLine, targetColumn, breakpointCondition);
 
-    return { cdpResult: urlResult };
+    return {
+      cdpResult: urlResult,
+      ...(sourceMapResolution !== undefined ? { sourceMapResolution } : {}),
+    };
   }
 
   // Build the runtime + DAP breakpoint pair, reusing prior dapId when signature matches.
@@ -998,6 +1017,15 @@ export class NodeJSDebugAdapter extends DebugSession {
       condition: sourceBreakpoint.condition,
       logMessage: sourceBreakpoint.logMessage,
     };
+
+    if (placement.sourceMapResolution) {
+      this.breakpointSourceMapResolutions.set(dapId, placement.sourceMapResolution);
+    } else {
+      // A re-placement that no longer hops TS->JS (file changed, source-map
+      // dropped) must not keep the previous resolution under the same dapId.
+      this.breakpointSourceMapResolutions.delete(dapId);
+    }
+
     const actualBp = new Breakpoint(verified, line, column);
     const sourceName = path.split("/").pop();
 
@@ -1165,6 +1193,8 @@ export class NodeJSDebugAdapter extends DebugSession {
         }
       }
 
+      this.breakpointSourceMapResolutions.delete(dapId);
+
       if (list.length === 0) {
         this.breakpoints.delete(filePath);
       }
@@ -1173,6 +1203,15 @@ export class NodeJSDebugAdapter extends DebugSession {
     }
 
     return { removed: false };
+  }
+
+  /**
+   * Source-map resolution captured during placeSingleBreakpoint for the given
+   * DAP id, or undefined if the breakpoint did not hop TS->JS (or has been
+   * removed). DAPDebuggerManager uses this to skip the redundant resolve pass.
+   */
+  public getBreakpointSourceMapResolution(dapId: number): SourceMapResolution | undefined {
+    return this.breakpointSourceMapResolutions.get(dapId);
   }
 
   private async clearCDPBreakpoints(filePath: string): Promise<void> {
@@ -1191,6 +1230,12 @@ export class NodeJSDebugAdapter extends DebugSession {
         this.diagnostic(`Failed to remove breakpoint ${bp.id}: ${errorMessage(error)}\n`);
       }
     }));
+
+    for (const bp of existingBreakpoints) {
+      if (bp.dapId !== undefined) {
+        this.breakpointSourceMapResolutions.delete(bp.dapId);
+      }
+    }
 
     this.breakpoints.delete(filePath);
   }

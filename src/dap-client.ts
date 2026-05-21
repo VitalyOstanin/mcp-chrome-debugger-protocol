@@ -3,6 +3,7 @@ import { z } from 'zod';
 import safeStringify from 'safe-stable-stringify';
 import type { DebugProtocol } from '@vscode/debugprotocol';
 import { NodeJSDebugAdapter, type NodeJSLaunchRequestArguments, type NodeJSAttachRequestArguments } from './nodejs-debug-adapter.js';
+import type { SourceMapResolution } from './source-map-resolver.js';
 import type { LogpointHit, DebuggerEvent, TrackedBreakpoint } from './types.js';
 import { createSuccessResponse, createErrorResponse, errorMessage, type MCPResponse } from './utils.js';
 import { NotConnectedError, ProtocolError, ValidationError } from './errors.js';
@@ -1007,6 +1008,15 @@ export class DAPClient extends EventEmitter {
   // an array and then .find() — now it goes straight to Map.get().
   getTrackedBreakpoint(breakpointId: number): TrackedBreakpoint | undefined {
     return this.trackedBreakpoints.get(breakpointId);
+  }
+
+  /**
+   * Source-map resolution captured by the adapter during placeSingleBreakpoint.
+   * DAPDebuggerManager.setBreakpoints reads this instead of re-running
+   * SourceMapResolver.resolveSourceMapPosition for every actual breakpoint.
+   */
+  getBreakpointSourceMapResolution(dapId: number): SourceMapResolution | undefined {
+    return this.connection.adapter?.getBreakpointSourceMapResolution(dapId);
   }
 
   /**

@@ -407,63 +407,60 @@ export class DAPDebuggerManager {
         ?? lines?.map((line): TrackedSourceItem => ({ line }));
 
       if (trackedSource) {
-        // Re-run source-map resolution on the manager side so the tracked
-        // breakpoint records whether the adapter actually hopped TS->JS. The
-        // previous implementation hard-coded `used: false`, which silently
-        // hid TS-source breakpoints behind the generated JS location in
-        // `getBreakpoints()` listings.
-        await Promise.all(
-          response.body.breakpoints.map(async (actualBreakpoint, index) => {
-            const bp = trackedSource[index];
+        // Read source-map resolution from the adapter, which already computed
+        // it inside placeSingleBreakpoint. Re-running resolveSourceMapPosition
+        // here used to cost a second full pass per breakpoint and spun an
+        // unbounded Promise.all over the file's breakpoints; the cached path
+        // is cheap but not free, and JSON.parse of the sibling-resolver wire
+        // response was repeated per call.
+        for (let index = 0; index < response.body.breakpoints.length; index++) {
+          const actualBreakpoint = response.body.breakpoints[index]!;
+          const bp = trackedSource[index];
 
-            if (!(actualBreakpoint.id && bp)) {
-              return;
-            }
+          if (!(actualBreakpoint.id && bp)) {
+            continue;
+          }
 
-            const columnNumber = bp.column ?? 1;
-            const resolution = await this.sourceMapResolver.resolveSourceMapPosition(
-              absolutePath,
-              bp.line,
+          const columnNumber = bp.column ?? 1;
+          const resolution = this.dapClient.getBreakpointSourceMapResolution(actualBreakpoint.id);
+          const used = resolution !== undefined
+            && resolution.sourceMapInfo.success
+            && (resolution.targetFilePath !== absolutePath
+              || resolution.targetLineNumber !== bp.line
+              || resolution.targetColumnNumber !== columnNumber);
+
+          this.dapClient.addTrackedBreakpoint({
+            breakpointId: actualBreakpoint.id,
+            type: bp.logMessage ? 'logpoint' : 'breakpoint',
+            originalRequest: {
+              filePath: absolutePath,
+              lineNumber: bp.line,
+              // MCP/DAP coordinates are 1-based; default the column to 1 so
+              // tracking matches the adapter (nodejs-debug-adapter:805) and
+              // SourceMapResolver, which reject column < 1.
               columnNumber,
-            );
-            const used = resolution.sourceMapInfo.success
-              && (resolution.targetFilePath !== absolutePath
-                || resolution.targetLineNumber !== bp.line
-                || resolution.targetColumnNumber !== columnNumber);
-
-            this.dapClient.addTrackedBreakpoint({
-              breakpointId: actualBreakpoint.id,
-              type: bp.logMessage ? 'logpoint' : 'breakpoint',
-              originalRequest: {
-                filePath: absolutePath,
-                lineNumber: bp.line,
-                // MCP/DAP coordinates are 1-based; default the column to 1 so
-                // tracking matches the adapter (nodejs-debug-adapter:805) and
-                // SourceMapResolver, which reject column < 1.
-                columnNumber,
-                condition: bp.condition,
-                logMessage: bp.logMessage,
-              },
-              actualLocation: {
-                lineNumber: actualBreakpoint.line ?? bp.line,
-                columnNumber: actualBreakpoint.column ?? columnNumber,
-              },
-              sourceMapResolution: used
-                ? {
-                  used: true,
-                  sourceMapFile: resolution.sourceMapInfo.sourceMapUsed,
-                  matchedSource: resolution.sourceMapInfo.matchedSource,
-                  targetFile: resolution.targetFilePath,
-                  targetLocation: {
-                    lineNumber: resolution.targetLineNumber,
-                    columnNumber: resolution.targetColumnNumber,
-                  },
-                }
-                : { used: false },
-              timestamp: new Date(),
-            });
-          }),
-        );
+              condition: bp.condition,
+              logMessage: bp.logMessage,
+            },
+            actualLocation: {
+              lineNumber: actualBreakpoint.line ?? bp.line,
+              columnNumber: actualBreakpoint.column ?? columnNumber,
+            },
+            sourceMapResolution: used
+              ? {
+                used: true,
+                sourceMapFile: resolution.sourceMapInfo.sourceMapUsed,
+                matchedSource: resolution.sourceMapInfo.matchedSource,
+                targetFile: resolution.targetFilePath,
+                targetLocation: {
+                  lineNumber: resolution.targetLineNumber,
+                  columnNumber: resolution.targetColumnNumber,
+                },
+              }
+              : { used: false },
+            timestamp: new Date(),
+          });
+        }
       }
 
       return {
