@@ -202,32 +202,67 @@ export async function mapWithConcurrency<T, R>(
  * DAPDebuggerManager and SourceMapResolver used to inline two slightly
  * different copies of this; centralise so a future change touches one place.
  *
- * Result is memoised by `startDir` within the process. Project structure does
- * not change at runtime, and findProjectRoot is on the source-map /
- * setBreakpoints hot path — dropping the per-call existsSync chain is worth a
- * tiny Map.
+ * Caching behaviour:
+ *   - Successful hits cache forever. Project layout does not change at
+ *     runtime; the walk would just reproduce the same answer.
+ *   - Negative hits (no package.json found) cache for FIND_PROJECT_ROOT_NULL_TTL_MS,
+ *     so a project that was created after the first probe (e.g. on a fresh
+ *     long-running MCP session) can still be discovered without forcing a
+ *     full walk on every lookup.
+ *   - LRU eviction caps the Map at FIND_PROJECT_ROOT_CACHE_MAX entries; a
+ *     monorepo walked with many leaf paths would otherwise grow the cache
+ *     without bound. We rely on Map insertion order: re-insert on hit so the
+ *     most recent entries stay at the tail.
+ *
+ * Kept synchronous because tests/utils/test-app-manager.resolveAppPath is a
+ * sync static method that needs the result. The existsSync chain has bounded
+ * depth (≤ filesystem path depth, typically <10) so the event-loop block is
+ * sub-millisecond and dominated by the OS stat cache.
  */
-const projectRootCache = new Map<string, string | null>();
+const FIND_PROJECT_ROOT_CACHE_MAX = 1024;
+const FIND_PROJECT_ROOT_NULL_TTL_MS = 5 * 60 * 1000;
+
+interface ProjectRootCacheEntry {
+  value: string | null;
+  expiresAt: number; // Infinity for successful hits (never expire).
+}
+
+const projectRootCache = new Map<string, ProjectRootCacheEntry>();
+
+function touchCacheEntry(key: string, entry: ProjectRootCacheEntry): void {
+  projectRootCache.delete(key);
+  projectRootCache.set(key, entry);
+  while (projectRootCache.size > FIND_PROJECT_ROOT_CACHE_MAX) {
+    const oldest = projectRootCache.keys().next();
+
+    if (oldest.done) break;
+    projectRootCache.delete(oldest.value);
+  }
+}
 
 export function findProjectRoot(startDir: string): string | null {
   const cached = projectRootCache.get(startDir);
 
-  if (cached !== undefined) {
-    return cached;
+  if (cached !== undefined && Date.now() < cached.expiresAt) {
+    // Refresh LRU position so a hot key does not get evicted by a flood of
+    // one-off lookups.
+    touchCacheEntry(startDir, cached);
+
+    return cached.value;
   }
 
   let currentDir = startDir;
 
   while (currentDir !== dirname(currentDir)) {
     if (existsSync(join(currentDir, 'package.json'))) {
-      projectRootCache.set(startDir, currentDir);
+      touchCacheEntry(startDir, { value: currentDir, expiresAt: Number.POSITIVE_INFINITY });
 
       return currentDir;
     }
     currentDir = dirname(currentDir);
   }
 
-  projectRootCache.set(startDir, null);
+  touchCacheEntry(startDir, { value: null, expiresAt: Date.now() + FIND_PROJECT_ROOT_NULL_TTL_MS });
 
   return null;
 }
