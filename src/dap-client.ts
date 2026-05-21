@@ -546,6 +546,15 @@ export class DAPClient extends EventEmitter {
       port = parseInt(match[1], 10);
     }
 
+    if (!DAPClient.isValidPort(port)) {
+      return createErrorResponse(
+        'Failed to attach',
+        `connectUrl: port out of range or not an integer: ${url}`,
+        'VALIDATION_ERROR',
+        { url, port },
+      );
+    }
+
     return this.attachToProcess({ port, ...(address !== undefined && { address }) });
   }
 
@@ -849,8 +858,22 @@ export class DAPClient extends EventEmitter {
     return DAPClient.LOOPBACK_HOSTS.has(host.toLowerCase());
   }
 
+  private static isValidPort(value: unknown): value is number {
+    return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65535;
+  }
+
   async attachToProcess(args: { port?: number; address?: string }): Promise<MCPResponse> {
     const host = args.address ?? DEFAULTS.INSPECTOR_CLIENT_HOST;
+    const port = args.port ?? DEFAULTS.INSPECTOR_PORT;
+
+    if (!DAPClient.isValidPort(port)) {
+      return createErrorResponse(
+        'Invalid inspector port',
+        `Port must be an integer in 1..65535, got: ${String(args.port)}`,
+        'VALIDATION_ERROR',
+        { port: args.port },
+      );
+    }
 
     if (!this.isLoopbackHost(host) && process.env.MCP_CDP_ALLOW_REMOTE !== '1') {
       return createErrorResponse(
