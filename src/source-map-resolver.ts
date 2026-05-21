@@ -111,6 +111,38 @@ export class SourceMapResolver {
   // means rebuilds are only paid for files that actually changed on disk.
   private readonly traceMapCache = new Map<string, CachedTraceMap>();
   private readonly sourceMapListingCache = new Map<string, SourceMapListing>();
+  // Cross-map basename index: sourceBaseName -> set of map files whose
+  // `sources[]` contains a path with that basename. Lets the resolve loop
+  // skip directly to maps that might contain the requested source, instead of
+  // doing one matchSource() call per map in the listing. Populated lazily by
+  // getTraceMap; entries are removed on cache replace, LRU eviction, and the
+  // invalidate* methods.
+  private readonly mapsByBasename = new Map<string, Set<string>>();
+
+  private addBasenamesForMap(mapFile: string, entry: CachedTraceMap): void {
+    for (const sourceBase of entry.sourcesByBasename.keys()) {
+      let set = this.mapsByBasename.get(sourceBase);
+
+      if (!set) {
+        set = new Set<string>();
+        this.mapsByBasename.set(sourceBase, set);
+      }
+
+      set.add(mapFile);
+    }
+  }
+
+  private removeBasenamesForMap(mapFile: string, entry: CachedTraceMap): void {
+    for (const sourceBase of entry.sourcesByBasename.keys()) {
+      const set = this.mapsByBasename.get(sourceBase);
+
+      if (!set) continue;
+
+      set.delete(mapFile);
+
+      if (set.size === 0) this.mapsByBasename.delete(sourceBase);
+    }
+  }
 
   private async getTraceMap(mapFile: string): Promise<CachedTraceMap | null> {
     try {
@@ -152,11 +184,22 @@ export class SourceMapResolver {
         sourcesByBasename,
       };
 
+      // Update the cross-map index: drop stale basenames (when an old entry
+      // existed at this key with different sources after a rebuild), then add
+      // the new ones.
+      if (cached) this.removeBasenamesForMap(mapFile, cached);
+      this.addBasenamesForMap(mapFile, entry);
+
       this.traceMapCache.set(mapFile, entry);
       while (this.traceMapCache.size > TRACE_MAP_CACHE_LIMIT) {
         const oldestKey = this.traceMapCache.keys().next().value;
 
         if (oldestKey === undefined) break;
+
+        const evicted = this.traceMapCache.get(oldestKey);
+
+        if (evicted) this.removeBasenamesForMap(oldestKey, evicted);
+
         this.traceMapCache.delete(oldestKey);
       }
 
@@ -395,8 +438,21 @@ export class SourceMapResolver {
     try {
       const mapFiles = await this.collectMapFilesForResolve(sourceMapPaths, originalSourcePath);
       const availableSources: Array<{ sourceMap: string; sources: string[] }> = [];
+      // Walk hot candidates first: maps already parsed and known to contain a
+      // source with this basename. Falls back to the full listing for anything
+      // not yet seen by getTraceMap, preserving correctness on cold caches.
+      const originalBaseName = basename(originalSource.replace(/\\/g, '/'));
+      const hotCandidates = originalBaseName
+        ? this.mapsByBasename.get(originalBaseName)
+        : undefined;
+      const orderedMapFiles = hotCandidates && hotCandidates.size > 0
+        ? [
+          ...mapFiles.filter(m => hotCandidates.has(m)),
+          ...mapFiles.filter(m => !hotCandidates.has(m)),
+        ]
+        : mapFiles;
 
-      for (const mapFile of mapFiles) {
+      for (const mapFile of orderedMapFiles) {
         const cached = await this.getTraceMap(mapFile);
 
         if (!cached || cached.traceMap.sources.length === 0) continue;
@@ -634,13 +690,22 @@ export class SourceMapResolver {
    * mtime+size, so callers rarely need this -- it exists for tests and for
    * recovery from cases where an upstream tool rewrote a map atomically with
    * the same size+mtime.
+   *
+   * Also keeps the cross-map basename index ({@link mapsByBasename}) in sync
+   * so subsequent resolves do not get pointed at maps that are no longer in
+   * the parsed cache.
    */
   invalidateTraceMap(mapFile?: string): void {
     if (mapFile === undefined) {
       this.traceMapCache.clear();
+      this.mapsByBasename.clear();
 
       return;
     }
+
+    const cached = this.traceMapCache.get(mapFile);
+
+    if (cached) this.removeBasenamesForMap(mapFile, cached);
 
     this.traceMapCache.delete(mapFile);
   }

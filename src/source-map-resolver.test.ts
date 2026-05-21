@@ -180,6 +180,66 @@ describe('SourceMapResolver.invalidateSourceMapListing', () => {
   });
 });
 
+describe('SourceMapResolver.resolveGeneratedPosition basename hot-candidate ordering', () => {
+  let projectRoot: string;
+
+  beforeAll(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'smr-hot-'));
+    await writeFile(join(projectRoot, 'package.json'), '{}');
+    await mkdir(join(projectRoot, 'dist'), { recursive: true });
+    await mkdir(join(projectRoot, 'src'), { recursive: true });
+
+    // Two .map files. Only the second contains "target.ts" -- the hot-candidate
+    // index should let the resolver find it without depending on iteration
+    // order of the listing.
+    await writeFile(
+      join(projectRoot, 'dist', 'unrelated.js.map'),
+      JSON.stringify({
+        version: 3,
+        sources: ['../src/unrelated.ts'],
+        mappings: '',
+        names: [],
+      }),
+    );
+    await writeFile(
+      join(projectRoot, 'dist', 'target.js.map'),
+      JSON.stringify({
+        version: 3,
+        sources: ['../src/target.ts'],
+        mappings: 'AAAA',
+        names: [],
+      }),
+    );
+  });
+
+  afterAll(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it('matches the right map regardless of listing order after cache warm-up', async () => {
+    const resolver = new SourceMapResolver();
+    // Warm: a no-match call parses both maps and populates mapsByBasename for
+    // both 'unrelated.ts' and 'target.ts'.
+    const warm = await resolver.resolveGeneratedPosition(
+      'absent.ts', 1, 1, undefined, join(projectRoot, 'src', 'absent.ts'),
+    );
+    const warmParsed = JSON.parse(warm.content[0]!.text) as Record<string, unknown>;
+
+    expect(warmParsed.searchedMaps).toBe(2);
+
+    // Hot: ask for 'target.ts'. The basename index should put 'target.js.map'
+    // first; the iteration finds it without walking 'unrelated.js.map'.
+    const hot = await resolver.resolveGeneratedPosition(
+      'target.ts', 1, 1, undefined, join(projectRoot, 'src', 'target.ts'),
+    );
+    const hotParsed = JSON.parse(hot.content[0]!.text) as Record<string, unknown>;
+
+    expect(hotParsed.success).toBe(true);
+    expect((hotParsed.sourceMapUsed as string).endsWith('target.js.map')).toBe(true);
+    expect(hotParsed.matchedSource).toBe('../src/target.ts');
+  });
+});
+
 describe('SourceMapResolver.resolveSourceMapPosition for non-source files', () => {
   const resolver = new SourceMapResolver();
 
