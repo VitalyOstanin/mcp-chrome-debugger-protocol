@@ -30,6 +30,35 @@ export interface SourceMapResolution {
   };
 }
 
+// Typed internal result of resolveGeneratedPosition / resolveOriginalPosition.
+// The public MCP-wrapped methods stringify these; in-process callers consume
+// the typed shape directly, sidestepping a JSON.parse round-trip and the
+// implicit "the wire JSON happens to round-trip cleanly" coupling.
+interface GeneratedPositionSuccess {
+  success: true;
+  generatedPosition: { line: number; column: number };
+  sourceMapUsed: string;
+  matchedSource: string;
+}
+
+interface GeneratedPositionFailure {
+  success: false;
+  reason: 'invalid-coordinates' | 'invalid-source' | 'no-match' | 'error';
+  // Diagnostic payload mirrors the wire envelope so callers wanting to forward
+  // the failure straight to MCP do not have to recompute fields.
+  error: string;
+  receivedLine?: number;
+  receivedColumn?: number;
+  searchedMaps?: number;
+  originalSource?: string;
+  inputCoordinates?: { line: number; column: number };
+  availableSources?: Array<{ sourceMap: string; sources: string[] }>;
+  suggestions?: string[];
+  message?: string;
+}
+
+type GeneratedPositionResult = GeneratedPositionSuccess | GeneratedPositionFailure;
+
 interface CachedTraceMap {
   mtimeMs: number;
   size: number;
@@ -356,9 +385,11 @@ export class SourceMapResolver {
           // suffix match — in monorepos with several maps containing the same
           // basename (e.g. `index.ts` in multiple packages) the basename-only
           // heuristic would otherwise pick a wrong sibling deterministically
-          // by readdir order.
-          const siblingResult = await this.resolveGeneratedPosition(relativePath, lineNumber, columnNumber, siblings, filePath);
-          const siblingData = JSON.parse(siblingResult.content[0]!.text);
+          // by readdir order. Calls the typed internal API to avoid a
+          // JSON.parse round-trip through the MCP envelope.
+          const siblingData = await this.resolveGeneratedPositionInternal(
+            relativePath, lineNumber, columnNumber, siblings, filePath,
+          );
 
           if (siblingData.success) {
             resolved = {
@@ -383,8 +414,9 @@ export class SourceMapResolver {
           }
 
           const sourceMapPaths = Array.from(dedup);
-          const resolveResult = await this.resolveGeneratedPosition(relativePath, lineNumber, columnNumber, sourceMapPaths, filePath);
-          const resolveData = JSON.parse(resolveResult.content[0]!.text);
+          const resolveData = await this.resolveGeneratedPositionInternal(
+            relativePath, lineNumber, columnNumber, sourceMapPaths, filePath,
+          );
 
           if (resolveData.success) {
             resolved = {
@@ -417,22 +449,42 @@ export class SourceMapResolver {
     return { targetFilePath, targetLineNumber, targetColumnNumber, sourceMapInfo };
   }
 
-  async resolveGeneratedPosition(
+  /**
+   * Typed internal entry point. Public `resolveGeneratedPosition` wraps this in
+   * an MCP envelope; in-process callers (e.g. {@link resolveSourceMapPosition})
+   * consume the typed result directly.
+   */
+  private async resolveGeneratedPositionInternal(
     originalSource: string,
     originalLine: number,
     originalColumn: number,
-    sourceMapPaths?: string[],
-    originalSourcePath?: string,
-  ) {
-    const coordError = validateMcpCoordinates(originalLine, originalColumn);
+    sourceMapPaths: string[] | undefined,
+    originalSourcePath: string | undefined,
+  ): Promise<GeneratedPositionResult> {
+    if (originalLine < 1) {
+      return {
+        success: false,
+        reason: 'invalid-coordinates',
+        error: 'Invalid line number: lines must be 1-based (start at 1)',
+        receivedLine: originalLine,
+      };
+    }
 
-    if (coordError) return coordError;
+    if (originalColumn < 1) {
+      return {
+        success: false,
+        reason: 'invalid-coordinates',
+        error: 'Invalid column number: columns must be 1-based (start at 1)',
+        receivedColumn: originalColumn,
+      };
+    }
 
     if (!originalSource) {
-      return srMapTextResponse({
+      return {
         success: false,
-        error: "Invalid originalSource: must be a non-empty path or filename",
-      });
+        reason: 'invalid-source',
+        error: 'Invalid originalSource: must be a non-empty path or filename',
+      };
     }
 
     try {
@@ -475,7 +527,7 @@ export class SourceMapResolver {
           });
 
           if (generatedPosition.line !== null) {
-            return srMapTextResponse({
+            return {
               success: true,
               generatedPosition: {
                 line: generatedPosition.line,
@@ -483,31 +535,75 @@ export class SourceMapResolver {
               },
               sourceMapUsed: mapFile,
               matchedSource,
-            });
+            };
           }
         }
       }
 
-      // Suggestions are only useful when nothing matched -- compute them lazily here.
-      const suggestions = this.suggestSimilarSources(availableSources, originalSource);
-
-      return srMapTextResponse({
+      return {
         success: false,
-        error: "No matching source found in available source maps",
+        reason: 'no-match',
+        error: 'No matching source found in available source maps',
         searchedMaps: mapFiles.length,
         originalSource,
-        coordinateSystem: "MCP/DAP coordinates: 1-based lines, 1-based columns",
         inputCoordinates: { line: originalLine, column: originalColumn },
         availableSources,
-        suggestions,
-      });
+        // Suggestions are only useful when nothing matched -- compute lazily.
+        suggestions: this.suggestSimilarSources(availableSources, originalSource),
+      };
     } catch (error) {
-      return srMapTextResponse({
+      return {
         success: false,
-        error: "Failed to resolve generated position",
+        reason: 'error',
+        error: 'Failed to resolve generated position',
         message: errorMessage(error),
+      };
+    }
+  }
+
+  async resolveGeneratedPosition(
+    originalSource: string,
+    originalLine: number,
+    originalColumn: number,
+    sourceMapPaths?: string[],
+    originalSourcePath?: string,
+  ) {
+    const result = await this.resolveGeneratedPositionInternal(
+      originalSource, originalLine, originalColumn, sourceMapPaths, originalSourcePath,
+    );
+
+    if (result.success) {
+      return srMapTextResponse({
+        success: true,
+        generatedPosition: result.generatedPosition,
+        sourceMapUsed: result.sourceMapUsed,
+        matchedSource: result.matchedSource,
       });
     }
+
+    // Failure envelope: include the same diagnostic fields the prior wire
+    // format carried so MCP consumers see no regression.
+    return srMapTextResponse({
+      success: false,
+      error: result.error,
+      ...(result.receivedLine !== undefined ? {
+        receivedLine: result.receivedLine,
+        coordinateSystem: 'MCP/DAP: 1-based lines, 1-based columns',
+      } : {}),
+      ...(result.receivedColumn !== undefined ? {
+        receivedColumn: result.receivedColumn,
+        coordinateSystem: 'MCP/DAP: 1-based lines, 1-based columns',
+      } : {}),
+      ...(result.searchedMaps !== undefined ? { searchedMaps: result.searchedMaps } : {}),
+      ...(result.originalSource !== undefined ? { originalSource: result.originalSource } : {}),
+      ...(result.inputCoordinates !== undefined ? {
+        coordinateSystem: 'MCP/DAP coordinates: 1-based lines, 1-based columns',
+        inputCoordinates: result.inputCoordinates,
+      } : {}),
+      ...(result.availableSources !== undefined ? { availableSources: result.availableSources } : {}),
+      ...(result.suggestions !== undefined ? { suggestions: result.suggestions } : {}),
+      ...(result.message !== undefined ? { message: result.message } : {}),
+    });
   }
 
   async resolveOriginalPosition(
