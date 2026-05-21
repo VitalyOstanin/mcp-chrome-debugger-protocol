@@ -103,8 +103,18 @@ export interface DAPConnection {
  */
 export class DAPClient extends EventEmitter {
   // Keep buffers bounded to avoid unbounded memory growth on long debugging sessions.
-  // FIFO semantics: when full, the oldest entry is dropped.
-  private static readonly MAX_BUFFER_SIZE = DEFAULTS.MAX_BUFFER_SIZE;
+  // FIFO semantics: when full, the oldest entry is dropped. Override via
+  // MCP_LOGPOINT_BUFFER_SIZE; values <= 0 or non-numeric fall back to default.
+  private static resolveBufferSize(): number {
+    const raw = process.env.MCP_LOGPOINT_BUFFER_SIZE;
+
+    if (raw === undefined || raw === '') return DEFAULTS.MAX_BUFFER_SIZE;
+
+    const parsed = Number.parseInt(raw, 10);
+
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULTS.MAX_BUFFER_SIZE;
+  }
+  private static readonly MAX_BUFFER_SIZE = DAPClient.resolveBufferSize();
 
   private readonly connection: DAPConnection = {
     adapter: null,
@@ -234,16 +244,27 @@ export class DAPClient extends EventEmitter {
           message = payloadRaw.length ? payloadRaw : undefined;
         }
 
-        const hit = {
+        // Live consumers (mcp-server notification, dap-debugger-manager) get
+        // the parsed payload via the emitted event. The ring buffer keeps only
+        // payloadRaw; getLogpointHits lazily re-parses on read, avoiding the
+        // double storage (string + parsed V8 object) for every stored hit.
+        const hit: LogpointHit = {
           message,
           payloadRaw,
           payload: parsed,
           timestamp: new Date(),
           executionContextId,
           level: 'info',
-        } as const;
+        };
+        const stored: LogpointHit = {
+          message,
+          payloadRaw,
+          timestamp: hit.timestamp,
+          executionContextId,
+          level: 'info',
+        };
 
-        this.appendLogpointHit(hit);
+        this.appendLogpointHit(stored);
         this.emit('logpointHit', hit);
       } else if (event.event === 'terminated') {
         this.handleTerminatedEvent();
@@ -1044,8 +1065,21 @@ export class DAPClient extends EventEmitter {
     const totalCount = this.logpointHits.length;
     const offset = opts?.offset ?? 0;
     const limit = opts?.limit ?? totalCount;
+    const stored = this.logpointHits.slice(offset, limit);
+    // Stored hits keep payloadRaw only; lazily rebuild payload on read so the
+    // ring buffer does not retain the parsed JSON object alongside the source
+    // string for every entry.
+    const items = stored.map((hit): LogpointHit => {
+      if (hit.payloadRaw === undefined || hit.payloadRaw === '') return hit;
 
-    return { items: this.logpointHits.slice(offset, limit), totalCount };
+      try {
+        return { ...hit, payload: JSON.parse(hit.payloadRaw) as unknown };
+      } catch {
+        return hit;
+      }
+    });
+
+    return { items, totalCount };
   }
 
   clearLogpointHits(): void {

@@ -26,8 +26,11 @@ export const DEFAULTS = {
   COMMAND_AVAILABILITY_TIMEOUT_MS: 1_000,
   // Truncation default for tool responses (manager.truncateResult).
   TRUNCATE_MAX_LENGTH: 20_000,
-  // Bounded buffers in DAPClient (logpoint hits, debugger events).
-  MAX_BUFFER_SIZE: 10_000,
+  // Bounded buffers in DAPClient (logpoint hits, debugger events). Lowered
+  // from 10_000 because a logpoint inside a hot loop can fill the ring with
+  // payloads of several KB each, putting tens of MB on RSS for each of the
+  // two buffers. Override at runtime via MCP_LOGPOINT_BUFFER_SIZE.
+  MAX_BUFFER_SIZE: 2_000,
   // Polling for scriptParsed in NodeJSDebugAdapter.getScriptIdForPath.
   SCRIPT_LOOKUP_POLL_INTERVAL_MS: 50,
   SCRIPT_LOOKUP_DEFAULT_TIMEOUT_MS: 1_000,
