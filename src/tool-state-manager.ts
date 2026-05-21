@@ -80,6 +80,14 @@ export class ToolStateManager {
   }
 
   setPaused(paused: boolean): void {
+    // Drop spurious "paused" notifications received after disconnect: events
+    // from the previous CDP session may land after setConnection(false), and
+    // recording isPaused=true while isConnected=false would leave the tool
+    // gate in an inconsistent state ("paused but no debugger to step in").
+    // Resume signals (paused=false) are always honoured -- they only ever
+    // relax constraints.
+    if (paused && !this.isConnected) return;
+
     if (this.isPaused !== paused) {
       this.isPaused = paused;
       this.notifyStateChange();

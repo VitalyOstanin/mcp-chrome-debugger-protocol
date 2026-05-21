@@ -31,6 +31,31 @@ describe('ToolStateManager.getCurrentState', () => {
     m.setConnection(false);
     expect(m.isPausedState()).toBe(false);
   });
+
+  it('ignores setPaused(true) while disconnected (spurious late event)', () => {
+    const m = new ToolStateManager();
+
+    m.setPaused(true);
+    expect(m.isPausedState()).toBe(false);
+    expect(m.getCurrentState()).toBe('disconnected');
+  });
+
+  it('drops a late paused event that arrives after disconnect', () => {
+    const m = new ToolStateManager();
+
+    m.setConnection(true);
+    m.setConnection(false);
+    m.setPaused(true);
+    expect(m.isPausedState()).toBe(false);
+    expect(m.getCurrentState()).toBe('disconnected');
+  });
+
+  it('still honours setPaused(false) even when disconnected', () => {
+    const m = new ToolStateManager();
+
+    m.setPaused(false);
+    expect(m.isPausedState()).toBe(false);
+  });
 });
 
 describe('ToolStateManager.isToolEnabled rules', () => {
@@ -86,8 +111,7 @@ describe('ToolStateManager.getToolState', () => {
     const m = new ToolStateManager();
     const info = m.getToolState('continue');
 
-    expect(info.isEnabled).toBe(false);
-    expect(info.reason).toBe('Requires debugger connection');
+    expect(info).toEqual({ isEnabled: false, reason: 'Requires debugger connection' });
   });
 
   it('explains "Requires debugger to be paused" for stepping tools', () => {
@@ -97,8 +121,7 @@ describe('ToolStateManager.getToolState', () => {
 
     const info = m.getToolState('next');
 
-    expect(info.isEnabled).toBe(false);
-    expect(info.reason).toBe('Requires debugger to be paused');
+    expect(info).toEqual({ isEnabled: false, reason: 'Requires debugger to be paused' });
   });
 
   it('explains "Only available when disconnected" for attach when connected', () => {
@@ -108,16 +131,14 @@ describe('ToolStateManager.getToolState', () => {
 
     const info = m.getToolState('attach');
 
-    expect(info.isEnabled).toBe(false);
-    expect(info.reason).toBe('Only available when disconnected from debugger');
+    expect(info).toEqual({ isEnabled: false, reason: 'Only available when disconnected from debugger' });
   });
 
   it('returns "Unknown tool" reason for unknown tool', () => {
     const m = new ToolStateManager();
     const info = m.getToolState('xxx');
 
-    expect(info.isEnabled).toBe(false);
-    expect(info.reason).toBe('Unknown tool: xxx');
+    expect(info).toEqual({ isEnabled: false, reason: 'Unknown tool: xxx' });
   });
 });
 
