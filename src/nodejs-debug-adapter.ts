@@ -12,7 +12,7 @@ import {
 import type { DebugProtocol } from '@vscode/debugprotocol';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { setTimeout as sleep, setTimeout as setTimeoutP } from 'node:timers/promises';
-import { basename as pathBasename } from 'node:path';
+import { basename as pathBasename, resolve as pathResolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CDPTransport, type CDPConnection } from './cdp-transport.js';
 import type { Protocol } from 'devtools-protocol';
@@ -998,17 +998,24 @@ export class NodeJSDebugAdapter extends DebugSession {
       // urlRegex match before giving up.
       this.diagnostic(`setBreakpointByUrl exact-url failed: ${errorMessage(error)}; retrying via urlRegex`);
 
-      const escapedPath = targetPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      // Resolve before escaping so '..' / '.' segments are normalised; an
+      // unresolved path could fail to match a URL that V8 reported in
+      // canonical form. Anchor the regex with ^file:// so it cannot
+      // accidentally match data:/blob:/http: URLs that happen to contain
+      // the same suffix (e.g. a sourcemap referenced from an HTTP module).
+      const resolvedPath = pathResolve(targetPath);
+      const escapedPath = resolvedPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const urlRegex = `^file://.*${escapedPath}$`;
       const cdpResult = await this.cdpTransport.sendCommand<Protocol.Debugger.SetBreakpointByUrlResponse>(
         "Debugger.setBreakpointByUrl",
         {
           lineNumber: Math.max(0, targetLine - 1),
-          urlRegex: `file:.*${escapedPath}$`,
+          urlRegex,
           condition: breakpointCondition,
         },
       );
 
-      this.diagnostic(`setBreakpointByUrl at regex /${escapedPath}$/ line=${targetLine} col=${targetColumn}\n`);
+      this.diagnostic(`setBreakpointByUrl at regex /${urlRegex}/ line=${targetLine} col=${targetColumn}\n`);
 
       return cdpResult;
     }
