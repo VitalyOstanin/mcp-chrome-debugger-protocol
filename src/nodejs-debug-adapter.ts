@@ -10,7 +10,7 @@ import {
   Event as DAEvent,
 } from '@vscode/debugadapter';
 import type { DebugProtocol } from '@vscode/debugprotocol';
-import { spawn, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { setTimeout as sleep, setTimeout as setTimeoutP } from 'node:timers/promises';
 import { basename as pathBasename, resolve as pathResolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -387,62 +387,29 @@ export class NodeJSDebugAdapter extends DebugSession {
     this.sendEvent(new InitializedEvent());
   }
 
+  /**
+   * launch is not supported by this MCP server. We only attach to an
+   * already-running Node.js process (the binding/logpoint plumbing and the
+   * ToolStateManager `attach`/`disconnect` gating are written around the
+   * "external debuggee" model). The DAPClient dispatch table routes 'launch'
+   * to a typed ValidationError before this method is ever called, but the
+   * DebugSession base class would still invoke this override if the adapter
+   * is wired up to a stdio DAP transport in the future -- so respond with the
+   * same explicit unsupported-operation error here.
+   */
   protected override async launchRequest(
     response: DebugProtocol.LaunchResponse,
     args: NodeJSLaunchRequestArguments,
   ): Promise<void> {
-    try {
-      // Validate required parameters
-      if (!args.program) {
-        this.sendErrorResponse(response, DAP_ERROR_CODES.LAUNCH_PROGRAM_REQUIRED, "Program path is required");
+    void args;
+    this.sendErrorResponse(
+      response,
+      DAP_ERROR_CODES.LAUNCH_FAILED,
+      'launch is not supported by this MCP server; start your Node.js process with ' +
+      '--inspect-brk and use the attach tool instead',
+    );
 
-        return;
-      }
-
-      // Prepare Node.js arguments for debugging.
-      // Bind inspector to loopback only -- 0.0.0.0 exposes Runtime.evaluate (RCE)
-      // to anyone on the local network and historically allowed DNS rebinding RCE.
-      const nodeArgs = [
-        "--inspect-brk=127.0.0.1:0",
-        args.program,
-        ...(args.args ?? []),
-      ];
-
-      // Launch Node.js process with debugging enabled
-      this.nodeProcess = spawn("node", nodeArgs, {
-        cwd: args.cwd ?? process.cwd(),
-        env: { ...process.env, ...args.env },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-
-      if (!this.nodeProcess.pid) {
-        throw new ProtocolError("Failed to launch Node.js process");
-      }
-
-      // Handle process output
-      this.nodeProcess.stdout?.on("data", (data) => {
-        this.sendEvent(new OutputEvent(data.toString(), "stdout"));
-      });
-
-      this.nodeProcess.stderr?.on("data", (data) => {
-        this.sendEvent(new OutputEvent(data.toString(), "stderr"));
-      });
-
-      this.logSourceMapConfig(args);
-
-      this.nodeProcess.on("exit", () => {
-        this.sendEvent(new TerminatedEvent());
-        this.nodeProcess = null;
-      });
-
-      this.sendResponse(response);
-    } catch (error) {
-      this.sendErrorResponse(
-        response,
-        DAP_ERROR_CODES.LAUNCH_FAILED,
-        `Launch failed: ${errorMessage(error)}`,
-      );
-    }
+    return Promise.resolve();
   }
 
   protected override async attachRequest(
