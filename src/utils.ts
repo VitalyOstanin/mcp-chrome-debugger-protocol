@@ -102,6 +102,23 @@ export function createSuccessResponse<T>(data: T): MCPResponse {
   };
 }
 
+/**
+ * Variant of {@link createSuccessResponse} that accepts an already-serialized
+ * `data` payload. Use when the caller has already serialized `data` for a
+ * different reason (e.g. {@link DAPDebuggerManager.truncateResult} stringifies
+ * to measure size against `maxLength`); this avoids a second walk of the same
+ * object. `dataJson` MUST be valid JSON (deterministic, no trailing/leading
+ * whitespace) -- the source is interpolated directly into the envelope.
+ */
+export function createSuccessResponseFromJson(dataJson: string): MCPResponse {
+  return {
+    content: [{
+      type: "text",
+      text: `{"success":true,"data":${dataJson}}`,
+    }],
+  };
+}
+
 // Context keys whose values may carry user-authored expressions / values that
 // could contain secrets (e.g. evaluate("process.env.API_KEY"), setVariable
 // receiving a secret literal). Redact them when echoing the context into

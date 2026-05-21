@@ -116,6 +116,14 @@ export class DAPDebuggerManager {
     // safeStringify without indentation, so the measurement must use the same
     // serializer. Run it once; the fallback path reuses the same string
     // instead of paying a second stringify on the original data.
+    //
+    // Note on the second stringify pass: the truncated `result` returned here
+    // is then wrapped by the caller in a { result, meta? } envelope and goes
+    // through createSuccessResponse, which stringifies that envelope again.
+    // The shape of the wrapper differs per caller (evaluate / stackTrace /
+    // variables each return different leaf keys), so there is no single
+    // envelope we can serialize here to feed createSuccessResponseFromJson.
+    // The double pass is intentional given the per-caller wrapper shape.
     const jsonString = safeStringify(result) ?? '';
 
     if (jsonString.length > maxLength) {
