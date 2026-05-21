@@ -5,7 +5,7 @@ import safeStringify from "safe-stable-stringify";
 
 import { DAPClient } from "./dap-client.js";
 import { DAPDebuggerManager } from "./dap-debugger-manager.js";
-import { ToolStateManager } from "./tool-state-manager.js";
+import { ToolStateManager, type ToolStateInfo } from "./tool-state-manager.js";
 import { DEFAULTS, INSPECTOR_PORT_RANGE } from "./constants.js";
 import { logError } from "./logger.js";
 import { packageManifest } from "./package-manifest.js";
@@ -55,13 +55,8 @@ export class NodeDebuggerMCPServer {
     };
   }
 
-  private validateToolAvailability(toolName: string): { isEnabled: boolean; reason?: string | undefined } {
-    const toolState = this.toolStateManager.getToolState(toolName);
-
-    return {
-      isEnabled: toolState.isEnabled,
-      reason: toolState.reason,
-    };
+  private validateToolAvailability(toolName: string): ToolStateInfo {
+    return this.toolStateManager.getToolState(toolName);
   }
 
   private createToolUnavailableError(toolName: string, reason: string) {
@@ -82,7 +77,7 @@ export class NodeDebuggerMCPServer {
     const availability = this.validateToolAvailability(toolName);
 
     if (!availability.isEnabled) {
-      return this.createToolUnavailableError(toolName, availability.reason!);
+      return this.createToolUnavailableError(toolName, availability.reason);
     }
 
     const result = await work();

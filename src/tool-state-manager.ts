@@ -1,9 +1,12 @@
 import { logError } from "./logger.js";
 
-export interface ToolStateInfo {
-  isEnabled: boolean;
-  reason?: string | undefined;
-}
+// Discriminated union: when isEnabled is false, reason is mandatory. When
+// true, reason has no meaning and is absent. Callers used to rely on the
+// non-null assertion `availability.reason!` even though TypeScript could
+// not enforce the implied dependency between the two fields.
+export type ToolStateInfo =
+  | { isEnabled: true }
+  | { isEnabled: false; reason: string };
 
 interface ToolRule {
   requiresConnection?: boolean | undefined;
@@ -109,14 +112,11 @@ export class ToolStateManager {
       };
     }
 
-    const isEnabled = this.isToolEnabled(toolName);
-    const result: ToolStateInfo = { isEnabled };
-
-    if (!isEnabled) {
-      result.reason = this.getDisabledReason(toolName, rule);
+    if (this.isToolEnabled(toolName)) {
+      return { isEnabled: true };
     }
 
-    return result;
+    return { isEnabled: false, reason: this.getDisabledReason(toolName, rule) };
   }
 
   private getDisabledReason(_toolName: string, rule: ToolRule): string {
