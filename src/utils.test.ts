@@ -245,4 +245,82 @@ describe('mapWithConcurrency', () => {
       { item: 'c', index: 2 },
     ]);
   });
+
+  it('fail-fast: stops scheduling new items after the first rejection', async () => {
+    // With limit=2 and 10 items, the second worker rejects at index=1 almost
+    // immediately. Without fail-fast scheduling, every other item would still
+    // be picked up by the first worker. With fail-fast, only items already
+    // claimed before the rejection should run.
+    const started: number[] = [];
+
+    await expect(
+      mapWithConcurrency(Array.from({ length: 10 }, (_, i) => i), 2, async (n) => {
+        started.push(n);
+
+        if (n === 1) {
+          // Tiny delay so the first worker has a chance to take index 0 before
+          // we reject; then reject from the second worker.
+          await sleep(2);
+          throw new Error('reject-at-1');
+        }
+        // Slow the survivor down so it can be observed not picking up later
+        // items after the rejection settles.
+        await sleep(30);
+
+        return n;
+      }),
+    ).rejects.toThrow('reject-at-1');
+
+    // The two workers each got at least one item (0 and 1). Workers may pick
+    // up at most one more item before the firstError flag is observed, so a
+    // small handful of extra items is allowed -- but the full 10 must not be
+    // scheduled. Allow a generous safety margin while still showing that
+    // scheduling stopped.
+    expect(started).toContain(0);
+    expect(started).toContain(1);
+    expect(started.length).toBeLessThan(10);
+  });
+
+  it('AbortSignal already aborted: rejects without invoking fn', async () => {
+    const controller = new AbortController();
+
+    controller.abort(new Error('pre-aborted'));
+
+    let called = 0;
+
+    await expect(
+      mapWithConcurrency([1, 2, 3], 2, async (n) => {
+        called++;
+
+        return n;
+      }, controller.signal),
+    ).rejects.toThrow('pre-aborted');
+
+    expect(called).toBe(0);
+  });
+
+  it('AbortSignal mid-run: stops scheduling further items', async () => {
+    const controller = new AbortController();
+    const started: number[] = [];
+    const work = mapWithConcurrency(
+      Array.from({ length: 20 }, (_, i) => i),
+      2,
+      async (n) => {
+        started.push(n);
+        await sleep(5);
+
+        return n;
+      },
+      controller.signal,
+    );
+
+    // Let a couple of items kick off, then abort.
+    await sleep(8);
+    controller.abort(new Error('cancel-now'));
+
+    await expect(work).rejects.toThrow('cancel-now');
+    // Some items must have started before the abort, but not all 20.
+    expect(started.length).toBeGreaterThan(0);
+    expect(started.length).toBeLessThan(20);
+  });
 });

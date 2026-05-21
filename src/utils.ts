@@ -173,25 +173,68 @@ export const sleep = setTimeout;
  * caller can index back by the original position (matches Promise.all
  * semantics). Used on hot paths like `setBreakpoints` where unbounded
  * parallelism would saturate downstream CDP roundtrips.
+ *
+ * Fail-fast: when any `fn` invocation rejects, in-flight workers finish their
+ * current item and then exit without picking up further work, and the outer
+ * Promise rejects with that first error. This avoids wasting CDP roundtrips
+ * (and worse, leaving partial breakpoint state) once we already know the
+ * batch is failing.
+ *
+ * Cancellation: if `signal` is provided and becomes aborted (either before or
+ * during the run), workers stop picking up new items at the next loop check
+ * and the outer Promise rejects with the signal's reason. Items already in
+ * flight still complete -- node:fs/promises and CDP requests do not all
+ * honour AbortSignal mid-call.
  */
 export async function mapWithConcurrency<T, R>(
   items: readonly T[],
   limit: number,
   fn: (item: T, index: number) => Promise<R>,
+  signal?: AbortSignal,
 ): Promise<R[]> {
   if (limit <= 0) {
     throw new Error(`mapWithConcurrency: limit must be > 0, got ${limit}`);
   }
 
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error(`mapWithConcurrency aborted: ${String(signal.reason)}`);
+  }
+
   const results: R[] = new Array<R>(items.length);
   let cursor = 0;
+  // Shared abort flag so a rejection in one worker stops the others from
+  // picking up new items. Promise.all already rejects on first failure but
+  // it does not stop already-running iterators; we need this for fail-fast
+  // scheduling.
+  let firstError: unknown;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
     for (let index = cursor++; index < items.length; index = cursor++) {
-      results[index] = await fn(items[index]!, index);
+      if (firstError !== undefined) return;
+      if (signal?.aborted) {
+        firstError = signal.reason instanceof Error
+          ? signal.reason
+          : new Error(`mapWithConcurrency aborted: ${String(signal.reason)}`);
+
+        return;
+      }
+
+      try {
+        results[index] = await fn(items[index]!, index);
+      } catch (err) {
+        // Only the first error is rethrown; later errors are dropped to keep
+        // semantics aligned with Promise.all.
+        firstError ??= err;
+
+        return;
+      }
     }
   });
 
   await Promise.all(workers);
+
+  if (firstError !== undefined) throw firstError;
 
   return results;
 }
