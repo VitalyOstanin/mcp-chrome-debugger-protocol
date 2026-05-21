@@ -241,26 +241,53 @@ export class SourceMapResolver {
     }
   }
 
-  // Walk a directory recursively, collecting every *.js.map file. Used by the build-dir
-  // scan; ignores read errors silently because directories may exist but be unreadable.
-  // Uses node:fs/promises readdir with `recursive: true` so the whole subtree is walked
-  // by Node's libuv-based worker pool instead of a sequential JS-level recursion.
+  // Directory names that are never walked when scanning a build root for
+  // `.js.map` files. node_modules can be huge and the maps inside belong to
+  // third-party packages we are not setting breakpoints on; .git holds packfile
+  // blobs; .cache / .next / .turbo / .nuxt / .svelte-kit / .vercel are
+  // framework caches that ship many transient maps from intermediate
+  // compilation. Skipping these is a correctness + cost win: the listing only
+  // contains application output.
+  private static readonly SKIP_DIR_NAMES = new Set([
+    'node_modules',
+    '.git',
+    '.cache',
+    '.next',
+    '.turbo',
+    '.nuxt',
+    '.svelte-kit',
+    '.vercel',
+  ]);
+
+  // Walk a directory recursively, collecting every *.js.map file, but skipping
+  // the directory names in SKIP_DIR_NAMES so a project root with deep
+  // node_modules does not turn into a multi-second scan. Done by hand instead
+  // of via `readdir(..., { recursive: true })` because the built-in walker has
+  // no pre-descent filter -- it walks everything and lets us filter after.
+  // Errors on individual subdirectories are ignored (unreadable / disappeared
+  // mid-build) so a broken subtree never breaks the whole listing.
   private async collectSourceMapFiles(dir: string): Promise<string[]> {
-    let entries;
-
-    try {
-      entries = await readdir(dir, { withFileTypes: true, recursive: true });
-    } catch {
-      // Missing or unreadable build subtree is not fatal; callers handle empty
-      // listings.
-      return [];
-    }
-
     const results: string[] = [];
+    const stack: string[] = [dir];
 
-    for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith('.js.map')) {
-        results.push(join(entry.parentPath, entry.name));
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      let entries;
+
+      try {
+        entries = await readdir(current, { withFileTypes: true });
+      } catch {
+        // Missing or unreadable subtree is not fatal; move on.
+        continue;
+      }
+
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          if (SourceMapResolver.SKIP_DIR_NAMES.has(entry.name)) continue;
+          stack.push(join(current, entry.name));
+        } else if (entry.isFile() && entry.name.endsWith('.js.map')) {
+          results.push(join(current, entry.name));
+        }
       }
     }
 
