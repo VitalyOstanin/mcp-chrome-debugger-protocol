@@ -6,6 +6,59 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-05-21
+
+### Added
+- New MCP tool `setBreakpointsBatch` -- accepts an array of `{filePath, lines[]}` entries and places breakpoints in parallel via `mapWithConcurrency` (cap 4). Returns per-file results and an aggregate `summary` with `{totalFiles, succeeded, failed, totalBreakpoints}`. Registered in [src/mcp-server.ts](src/mcp-server.ts), tool gate added to [src/tool-state-manager.ts](src/tool-state-manager.ts).
+- `mapWithConcurrency` gains an optional `AbortSignal` parameter and fail-fast scheduling. A pre-aborted signal short-circuits before any work begins; mid-run abort stops workers from picking up further items; the first rejected `fn` short-circuits the rest of the batch so subsequent CDP roundtrips are not wasted ([src/utils.ts](src/utils.ts)).
+- Startup stderr warning when `MCP_CDP_ALLOW_REMOTE=1|true` is set, so an operator does not accidentally leave the loopback-only safety off after debugging a non-local target ([src/index.ts](src/index.ts)). Documented in [README.md](README.md).
+- Linux uid gate at attach time: when the MCP server runs as `root` (UID 0) and the target process is owned by another user, attach is rejected with structured error code `PID_OWNED_BY_OTHER_USER` (`/proc/<pid>/status` `Uid:` line). Prevents privilege-escalation surprises when the MCP server is started under a privileged shell ([src/dap-client.ts](src/dap-client.ts)). Documented in [README.md](README.md).
+- Source-map listing cache exposes explicit `invalidateSourceMapListing(roots?)` and `invalidateTraceMap(mapFile?)` so long-running sessions can drop stale entries after a rebuild without restarting the server ([src/source-map-resolver.ts](src/source-map-resolver.ts)).
+- Attach-time non-fatal warnings (e.g. partial enableDomains failures) are now surfaced through the MCP success envelope's `warnings` field instead of being swallowed by `logError` ([src/dap-client.ts](src/dap-client.ts)).
+- `getDebuggerState` exposes a `unhandledRejection` counter so operators can tell whether the debuggee has started silently swallowing rejections ([src/nodejs-debug-adapter.ts](src/nodejs-debug-adapter.ts)).
+- Variable handles are tagged with the current `pauseEpoch`; resolving a handle from a previous pause returns `STALE_VARIABLE_REFERENCE` instead of indexing into a stale CDP `objectId` ([src/dap-debugger-manager.ts](src/dap-debugger-manager.ts)).
+- Source-level injection-hardening unit tests for `buildLogpointExpression` covering backticks, `${...}`, backslashes, quoted placeholders, throwing placeholders, and the positional `__vars` design ([src/logpoint.test.ts](src/logpoint.test.ts)).
+- `createSuccessResponseFromJson` helper for callers that have already serialized the data payload (e.g. `truncateResult` measures size by stringifying first); avoids a second walk of the same object ([src/utils.ts](src/utils.ts)).
+
+### Changed
+- `buildLogpointExpression` switched from raw-expression keys in the internal `__vars` lookup to positional `__v0, __v1, ...` keys. The previous design relied on a quotes-only `replace()` that did not handle backslashes, so a crafted placeholder text could close the string and inject code. Positional keys eliminate the class of bug; wire-format keys still carry the original expression text via `JSON.stringify`, so downstream consumers are unaffected ([src/logpoint.ts](src/logpoint.ts)). Threat model and rationale documented inline.
+- `resolveGeneratedPosition` falls back to a cross-map basename index when the direct lookup misses, ordering candidates by matching basename first; tracked via `mapsByBasename` Map with bidirectional updates on cache miss/eviction ([src/source-map-resolver.ts](src/source-map-resolver.ts)).
+- Source-map scan skips `node_modules`, `.git`, `.cache`, `.next`, `.turbo`, `.nuxt`, `.svelte-kit`, `.vercel` to keep large monorepo walks bounded; replaced the recursive `readdir` with a hand-rolled stack walker ([src/source-map-resolver.ts](src/source-map-resolver.ts)).
+- `siblingMapCandidates` (cap 4) and `collectMapFilesForResolve` (cap 8) now use `mapWithConcurrency` over `Promise.all` for `pathExists` probes -- spiky filesystem IO no longer thrashes the event loop on first-resolve.
+- `removeBreakpointByDapId` indexes `dapId -> filePath` so removal is O(1) instead of a linear scan over `trackedBreakpoints` ([src/dap-debugger-manager.ts](src/dap-debugger-manager.ts)).
+- CDP DAP transport halves the default IPC buffer to 2 KiB and stops double-storing payloads in memory ([src/dap-client.ts](src/dap-client.ts)).
+- `setBreakpoints` reuses the adapter's source-map resolution result instead of re-running it inside the manager ([src/dap-debugger-manager.ts](src/dap-debugger-manager.ts)).
+- `RingBuffer` moved to its own module with JSDoc and dedicated unit tests; previously inlined in adapter code ([src/ring-buffer.ts](src/ring-buffer.ts)).
+- `resolveGeneratedPosition` got a typed internal API returning a discriminated `GeneratedPositionResult`; the public method wraps it in the MCP envelope and `resolveSourceMapPosition` calls the internal API directly, removing a round-trip through JSON parse ([src/source-map-resolver.ts](src/source-map-resolver.ts)).
+- `NodeJSDebugAdapter` lifecycle is now explicitly documented as one-shot; `disconnect()` resets internal state so re-attaching after a clean shutdown is a no-op rather than touching stale fields.
+- `ToolStateInfo` is now a discriminated union (`{isEnabled: true}` vs `{isEnabled: false, reason: string}`); callers no longer need the `reason!` non-null assertion that TypeScript could not enforce ([src/tool-state-manager.ts](src/tool-state-manager.ts)).
+- ESLint now enforces `@typescript-eslint/no-explicit-any` and `@typescript-eslint/no-floating-promises` repo-wide ([eslint.config.mjs](eslint.config.mjs)).
+- `MCPServer.close()` calls `dapClient.removeAllListeners()` before closing the stdio transport so a late CDP event cannot reach a torn-down adapter ([src/mcp-server.ts](src/mcp-server.ts)). Same hardening applied to `cdpTransport.removeAllListeners()` inside `NodeJSDebugAdapter.disconnect()` / `terminate()`.
+
+### Fixed
+- `setBreakpointByUrl` `urlRegex` is now anchored and the file path is normalised, so a path that is a strict suffix of another file in the workspace cannot match the wrong script ([src/dap-debugger-manager.ts](src/dap-debugger-manager.ts)).
+- `breakpointKey` distinguishes `undefined` from the empty string when composing the cache key, so a missing `condition` no longer collides with `condition: ''` ([src/dap-debugger-manager.ts](src/dap-debugger-manager.ts)).
+- `setPaused(true)` is dropped when the manager is disconnected. CDP can emit a `paused` event after the session has already been torn down; recording `isPaused=true` while `isConnected=false` would otherwise leave the tool gate in an inconsistent state ([src/tool-state-manager.ts](src/tool-state-manager.ts)).
+- `scriptsByBasename` no longer indexes synthetic CDP urls (`eval`, `vm`, `wasm://`, etc.); only file-like urls participate in the basename fallback ([src/nodejs-debug-adapter.ts](src/nodejs-debug-adapter.ts)).
+- `executionContextCreated` chains a `.catch()` on the `sendCommand` promise to track pending `addBinding` rejections; the previous try/catch around `void promise` was unreachable ([src/nodejs-debug-adapter.ts](src/nodejs-debug-adapter.ts)).
+- `launchRequest` returns a structured `LAUNCH_FAILED` error envelope immediately instead of partially initialising a child process; the `launch` MCP path was never supported but used to fall through silently ([src/nodejs-debug-adapter.ts](src/nodejs-debug-adapter.ts)).
+- `lastException` is cleared on non-exception pauses so an old exception payload no longer leaks into a subsequent step pause ([src/nodejs-debug-adapter.ts](src/nodejs-debug-adapter.ts)).
+- `pollForInspectorPort` switched from sequential probes to `Promise.allSettled` so a slow socket cannot stretch the probe window past the timeout ([src/dap-client.ts](src/dap-client.ts)).
+- `breakpointLocations` validates a non-empty `source.path` and returns a structured `VALIDATION_ERROR` instead of returning empty matches ([src/nodejs-debug-adapter.ts](src/nodejs-debug-adapter.ts)).
+- `path.basename` replaces `split('/').pop()` everywhere the basename is extracted, restoring correctness on Windows path separators.
+- `findProjectRoot` negative hits now respect `FIND_PROJECT_ROOT_NULL_TTL_MS`, and the cache is bounded by an LRU cap (`FIND_PROJECT_ROOT_CACHE_MAX = 1024`) so a monorepo walked with many leaf paths cannot grow the cache without bound ([src/utils.ts](src/utils.ts)).
+- `disconnect()` / `terminate()` SIGTERM the debuggee then SIGKILL if it has not exited within `KILL_GRACE_MS` ([src/nodejs-debug-adapter.ts](src/nodejs-debug-adapter.ts)).
+- `enableDebuggerPid` verifies the target is a Node.js process on macOS via `ps -o comm=`, matching the existing Linux check via `/proc/<pid>/comm` ([src/dap-client.ts](src/dap-client.ts)).
+- After a CDP reconnect, the adapter re-issues `addBinding` and `enableDomains` so logpoints and `Debugger`/`Runtime`/`Console` events resume working without manual re-attach.
+- `connectUrl` and `attachToProcess` validate the inspector port number against `1..65535` instead of trusting whatever the URL parsing produced; an out-of-range port now fails with `VALIDATION_ERROR` ([src/dap-client.ts](src/dap-client.ts)).
+- Tracked breakpoints whose underlying script is evicted from `scriptsById` are now reported as `verified=false` instead of staying silently stale.
+- `attachToProcess` tears down a half-constructed adapter on failure or re-attach so a second attempt does not stack additional CDP listeners over the previous session.
+- `mcpLogpoint` payloads handle non-string `message` values via `safeStringify` instead of `String(value)` (which would coerce `{a:1}` to `[object Object]`).
+- `Promise.allSettled` is used wherever a side-effecting CDP fan-out must not be aborted by the first rejection (e.g. `Debugger.enable` / `Runtime.enable` / `Console.enable` on transport reconnect).
+
+### Removed
+- Dead `simulateLogpointHit` method and the orphaned helpers `renderLogpointMessage` and `lookupDottedPath` that were superseded by `buildLogpointExpression` ([src/nodejs-debug-adapter.ts](src/nodejs-debug-adapter.ts), [src/logpoint.ts](src/logpoint.ts)).
+
 ## [1.8.1] - 2026-05-21
 
 ### Added
