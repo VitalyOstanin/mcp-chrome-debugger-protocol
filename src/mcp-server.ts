@@ -797,10 +797,17 @@ export class NodeDebuggerMCPServer {
   }
 
   /**
-   * Graceful shutdown: disconnect the active CDP session (if any) and close
-   * the MCP transport so the SDK stops reading stdin. Safe to call multiple
-   * times: dapClient.disconnect() tolerates "already disconnected" and
-   * server.close() is idempotent.
+   * Graceful shutdown: disconnect the active CDP session (if any), drop the
+   * EventEmitter listeners this class wired onto dapClient, and close the MCP
+   * transport so the SDK stops reading stdin. Safe to call multiple times:
+   * dapClient.disconnect() tolerates "already disconnected", removeAllListeners
+   * is idempotent, and server.close() is idempotent.
+   *
+   * Removing listeners matters in tests and in any host that re-instantiates
+   * MCPServer in the same process: without it, the previous server's closures
+   * would still be subscribed to a dapClient instance that nobody else holds,
+   * pinning that instance against GC and surfacing EventEmitter max-listener
+   * warnings on the next attach.
    */
   async close(): Promise<void> {
     try {
@@ -809,6 +816,12 @@ export class NodeDebuggerMCPServer {
       // Best-effort cleanup on shutdown: log but do not rethrow, so SIGTERM
       // still completes the close path and the host can move on.
       logError('Error during dapClient.disconnect on shutdown', error);
+    }
+
+    try {
+      this.dapClient.removeAllListeners();
+    } catch (error) {
+      logError('Error removing dapClient listeners on shutdown', error);
     }
 
     try {
