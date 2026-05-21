@@ -11,7 +11,7 @@ import {
 } from '@vscode/debugadapter';
 import type { DebugProtocol } from '@vscode/debugprotocol';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { setTimeout as sleep } from 'node:timers/promises';
+import { setTimeout as sleep, setTimeout as setTimeoutP } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CDPTransport, type CDPConnection } from './cdp-transport.js';
 import type { Protocol } from 'devtools-protocol';
@@ -1327,10 +1327,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     args: DebugProtocol.DisconnectArguments,
   ): Promise<void> {
     void args;
-    if (this.nodeProcess) {
-      this.nodeProcess.kill();
-      this.nodeProcess = null;
-    }
+    await this.killNodeProcessWithFallback();
 
     // Clean up CDP connection
     if (this.cdpTransport) {
@@ -1773,10 +1770,7 @@ export class NodeJSDebugAdapter extends DebugSession {
   }
 
   public async terminate(): Promise<DebugProtocol.TerminateResponse> {
-    if (this.nodeProcess) {
-      this.nodeProcess.kill();
-      this.nodeProcess = null;
-    }
+    await this.killNodeProcessWithFallback();
 
     if (this.cdpTransport) {
       await this.cdpTransport.disconnect();
@@ -1784,6 +1778,42 @@ export class NodeJSDebugAdapter extends DebugSession {
     }
 
     return this.okResponse<DebugProtocol.TerminateResponse>('terminate');
+  }
+
+  /**
+   * Send SIGTERM to the spawned debuggee, then escalate to SIGKILL if it does
+   * not exit within the timeout. nodeProcess.kill() defaults to SIGTERM which
+   * a CPU-bound or signal-ignoring debuggee can stall on indefinitely.
+   */
+  private async killNodeProcessWithFallback(timeoutMs: number = DEFAULTS.NODE_PROCESS_KILL_TIMEOUT_MS): Promise<void> {
+    const proc = this.nodeProcess;
+
+    if (!proc) return;
+
+    this.nodeProcess = null;
+
+    // Already exited before disconnect/terminate raced in.
+    if (proc.exitCode !== null || proc.signalCode !== null) return;
+
+    try {
+      proc.kill('SIGTERM');
+    } catch (error) {
+      this.diagnostic(`SIGTERM to debuggee failed: ${errorMessage(error)}\n`);
+    }
+
+    const exited = new Promise<boolean>((resolve) => {
+      proc.once('exit', () => { resolve(true); });
+    });
+    const timed = setTimeoutP(timeoutMs).then(() => false);
+    const cleanExit = await Promise.race([exited, timed]);
+
+    if (!cleanExit) {
+      try {
+        proc.kill('SIGKILL');
+      } catch (error) {
+        this.diagnostic(`SIGKILL to debuggee failed: ${errorMessage(error)}\n`);
+      }
+    }
   }
 
   public async restart(): Promise<DebugProtocol.RestartResponse> {

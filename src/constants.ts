@@ -31,6 +31,10 @@ export const DEFAULTS = {
   // payloads of several KB each, putting tens of MB on RSS for each of the
   // two buffers. Override at runtime via MCP_LOGPOINT_BUFFER_SIZE.
   MAX_BUFFER_SIZE: 2_000,
+  // Window we wait for the debuggee to exit after SIGTERM before escalating
+  // to SIGKILL. A CPU-bound or signal-ignoring debuggee otherwise stalls
+  // disconnect/terminate indefinitely.
+  NODE_PROCESS_KILL_TIMEOUT_MS: 2_000,
   // Polling for scriptParsed in NodeJSDebugAdapter.getScriptIdForPath.
   SCRIPT_LOOKUP_POLL_INTERVAL_MS: 50,
   SCRIPT_LOOKUP_DEFAULT_TIMEOUT_MS: 1_000,
