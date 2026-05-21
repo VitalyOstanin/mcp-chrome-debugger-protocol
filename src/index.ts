@@ -78,8 +78,27 @@ function parseArgsAndMaybeExit(argv: string[]): void {
   }
 }
 
+function warnIfAllowRemoteEnabled(): void {
+  const value = process.env.MCP_CDP_ALLOW_REMOTE;
+
+  if (value === '1' || value === 'true') {
+    // stderr only -- stdout is the MCP transport. Surface the risk on every
+    // start so an operator who forgot a leftover env override notices before
+    // the first remote attach. CDP Runtime.evaluate is unauthenticated RCE
+    // against any reachable inspector, so a stray non-loopback target on a
+    // shared host is a real exposure.
+    process.stderr.write(
+      'WARNING: MCP_CDP_ALLOW_REMOTE is enabled. The attach tool will accept ' +
+      'non-loopback inspector targets. CDP Runtime.evaluate over the network ' +
+      'is unauthenticated remote code execution -- only enable this on a host ' +
+      'where you trust every network peer that can reach the inspector port.\n',
+    );
+  }
+}
+
 async function main() {
   parseArgsAndMaybeExit(process.argv.slice(2));
+  warnIfAllowRemoteEnabled();
 
   const server = new NodeDebuggerMCPServer();
   // Track shutdown to make SIGINT/SIGTERM idempotent: a second signal during
