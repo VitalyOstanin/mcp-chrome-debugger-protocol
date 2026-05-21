@@ -2,7 +2,7 @@ import { TraceMap, originalPositionFor, generatedPositionFor, LEAST_UPPER_BOUND 
 import { readFile, stat, readdir, access } from "node:fs/promises";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import safeStringify from "safe-stable-stringify";
-import { findProjectRoot, errorMessage } from "./utils.js";
+import { findProjectRoot, errorMessage, mapWithConcurrency } from "./utils.js";
 import { BUILD_DIRS, SOURCE_DIR_MARKER } from "./constants.js";
 
 // Async existence check via fs.access — returns true on success, false on any
@@ -351,7 +351,13 @@ export class SourceMapResolver {
     // fast path silently degraded to the full build-dir scan for those.
     const mapName = `${baseName.replace(/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/, '')}.js.map`;
     const candidates = BUILD_DIRS.map(dir => join(baseRoot, dir, mapName));
-    const existsFlags = await Promise.all(candidates.map(c => pathExists(c)));
+    // Bound the concurrent fs.access calls. BUILD_DIRS currently has four
+    // entries so Promise.all would already be bounded by the array length, but
+    // using mapWithConcurrency makes the bound explicit and survives any
+    // future expansion of BUILD_DIRS without saturating the libuv thread pool
+    // (which defaults to 4 workers and is shared with readFile / readdir /
+    // stat across the rest of the resolver).
+    const existsFlags = await mapWithConcurrency(candidates, 4, (c) => pathExists(c));
 
     return candidates.filter((_, i) => existsFlags[i]);
   }
@@ -700,7 +706,14 @@ export class SourceMapResolver {
     // discover, just use these" -- callers rely on this to opt out of the
     // process.cwd() autodiscovery that would otherwise leak unrelated maps.
     if (sourceMapPaths !== undefined) {
-      const existsFlags = await Promise.all(sourceMapPaths.map(p => pathExists(p)));
+      // Cap the fs.access fan-out at 8: an explicit sourceMapPaths list can
+      // legitimately contain dozens of candidate maps (from siblings + project
+      // scan + the caller's own list), and Promise.all over all of them would
+      // queue every access on the same 4-thread libuv pool. Eight is a
+      // compromise -- enough parallelism to overlap stat latency, not enough
+      // to starve other concurrent operations (logpoint hits, breakpoint
+      // placement) that share the pool.
+      const existsFlags = await mapWithConcurrency(sourceMapPaths, 8, (p) => pathExists(p));
 
       return sourceMapPaths.filter((_, i) => existsFlags[i]);
     }
