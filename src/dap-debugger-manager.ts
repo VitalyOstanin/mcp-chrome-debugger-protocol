@@ -417,7 +417,13 @@ export class DAPDebuggerManager {
           const actualBreakpoint = response.body.breakpoints[index]!;
           const bp = trackedSource[index];
 
-          if (!(actualBreakpoint.id && bp)) {
+          // Defensive: response and tracked-source arrays must align 1:1 by
+          // index (the adapter builds both from the same iteration), but a
+          // malformed adapter response would otherwise silently corrupt the
+          // tracked-breakpoint map. The adapter also guarantees
+          // actualBreakpoint.id via assignDapBreakpointFields, so a missing id
+          // signals a protocol-level violation rather than an expected case.
+          if (actualBreakpoint.id === undefined || !bp) {
             continue;
           }
 
