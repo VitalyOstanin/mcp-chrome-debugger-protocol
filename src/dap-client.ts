@@ -784,6 +784,89 @@ export class DAPClient extends EventEmitter {
     return createSuccessResponse({ ...payload, debug });
   }
 
+  // /proc/<pid>/comm is truncated to TASK_COMM_LEN (16 bytes incl NUL).
+  // Match common Node.js executable names: "node", "nodejs", and the
+  // 15-byte "iojs"/"node ${name}" patterns produced by process.title.
+  private static readonly NODEJS_COMM_REGEX = /^(node|nodejs|iojs)\b/i;
+
+  /**
+   * Best-effort verification that the given pid belongs to a Node.js process.
+   * Returns:
+   *   - undefined: we could not determine the process name (procfs missing,
+   *     `ps` unavailable, ENOENT/EACCES on the lookup, or the platform is
+   *     neither Linux nor macOS). Callers should treat this as "not verified".
+   *   - { comm, looksLikeNode }: we resolved a process name; the flag says
+   *     whether it matches the Node.js executable regex.
+   */
+  private async probeProcessNodeName(pid: number): Promise<{ comm: string; looksLikeNode: boolean } | undefined> {
+    if (process.platform === 'linux') {
+      try {
+        const comm = (await readFile(`/proc/${pid}/comm`, 'utf8')).trim();
+
+        return { comm, looksLikeNode: DAPClient.NODEJS_COMM_REGEX.test(comm) };
+      } catch (commError) {
+        const code = (commError as NodeJS.ErrnoException | undefined)?.code;
+
+        logVerbose('dap-client', `Could not read /proc/${pid}/comm (${code ?? 'unknown'}), skipping Node.js sanity check`);
+
+        return undefined;
+      }
+    }
+
+    if (process.platform === 'darwin') {
+      try {
+        const comm = await this.runPsComm(pid);
+
+        if (comm === undefined) return undefined;
+
+        return { comm, looksLikeNode: DAPClient.NODEJS_COMM_REGEX.test(comm) };
+      } catch (psError) {
+        logVerbose('dap-client', `ps -o comm= -p ${pid} failed (${errorMessage(psError)}), skipping Node.js sanity check`);
+
+        return undefined;
+      }
+    }
+
+    return undefined;
+  }
+
+  private async runPsComm(pid: number): Promise<string | undefined> {
+    return new Promise((resolve) => {
+      const proc = spawn('ps', ['-o', 'comm=', '-p', String(pid)]);
+      let stdout = '';
+      let settled = false;
+      const settle = (value: string | undefined): void => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+        try {
+          proc.kill();
+        } catch {
+          // ps already exited; nothing to clean up.
+        }
+      };
+
+      proc.stdout.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString('utf8');
+      });
+      proc.on('error', () => { settle(undefined); });
+      proc.on('close', (code) => {
+        if (code !== 0) {
+          settle(undefined);
+
+          return;
+        }
+
+        const trimmed = stdout.trim();
+        // ps may return the full executable path on darwin (e.g. /usr/bin/node);
+        // take the basename so the regex match parity with /proc/<pid>/comm.
+        const basename = trimmed.split('/').pop() ?? trimmed;
+
+        settle(basename === '' ? undefined : basename);
+      });
+    });
+  }
+
   async enableDebuggerPid(
     pid: number,
     opts?: { discoverTimeoutMs?: number | undefined; probeTimeoutMs?: number | undefined; ports?: number[] | undefined },
@@ -809,36 +892,24 @@ export class DAPClient extends EventEmitter {
         );
       }
 
-      // Linux: best-effort sanity check that the target looks like Node.js
-      // before we send SIGUSR1. /proc/<pid>/comm holds the (truncated) process
-      // name. If the file is unreadable or the platform is not Linux we skip
-      // silently — the kill(pid, 0) gate above already enforces existence and
-      // permission. On non-Node.js targets SIGUSR1 frequently has a useful
-      // behaviour (log reopen, state dump) we have no right to trigger.
-      if (process.platform === 'linux') {
-        try {
-          const comm = (await readFile(`/proc/${pid}/comm`, 'utf8')).trim();
-          // /proc/<pid>/comm is truncated to TASK_COMM_LEN (16 bytes incl NUL).
-          // Match common Node.js executable names: "node", "nodejs", and the
-          // 15-byte "iojs"/"node ${name}" patterns produced by process.title.
-          const looksLikeNode = /^(node|nodejs|iojs)\b/i.test(comm);
+      // Linux / macOS: best-effort sanity check that the target looks like
+      // Node.js before we send SIGUSR1. On Linux we read /proc/<pid>/comm;
+      // macOS does not have procfs so we shell out to `ps -o comm= -p <pid>`.
+      // If neither path is available we skip silently — the kill(pid, 0) gate
+      // above already enforces existence and permission. On non-Node.js
+      // targets SIGUSR1 frequently has a side effect (log reopen, state dump)
+      // we have no right to trigger.
+      const nodeProcessName = await this.probeProcessNodeName(pid);
 
-          if (!looksLikeNode) {
-            return createErrorResponse(
-              'Target process is not Node.js',
-              `pid=${pid} has process name '${comm}', which is not a Node.js executable. ` +
-              'SIGUSR1 to a non-Node process can trigger destructive side effects (log reopen, ' +
-              'state dump). Refusing to proceed.',
-              'PID_NOT_NODEJS',
-              { pid, comm },
-            );
-          }
-        } catch (commError) {
-          const code = (commError as NodeJS.ErrnoException | undefined)?.code;
-
-          // EACCES / ENOENT here just means we cannot verify; log and continue.
-          logVerbose('dap-client', `Could not read /proc/${pid}/comm (${code ?? 'unknown'}), skipping Node.js sanity check`);
-        }
+      if (nodeProcessName !== undefined && !nodeProcessName.looksLikeNode) {
+        return createErrorResponse(
+          'Target process is not Node.js',
+          `pid=${pid} has process name '${nodeProcessName.comm}', which is not a Node.js executable. ` +
+          'SIGUSR1 to a non-Node process can trigger destructive side effects (log reopen, ' +
+          'state dump). Refusing to proceed.',
+          'PID_NOT_NODEJS',
+          { pid, comm: nodeProcessName.comm },
+        );
       }
 
       // Send SIGUSR1 to request inspector activation.
