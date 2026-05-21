@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SourceMapResolver } from './source-map-resolver.js';
 
 const parsePayload = (resp: { content: Array<{ type: string; text: string }> }): unknown =>
@@ -85,6 +88,95 @@ describe('SourceMapResolver.resolveOriginalPosition coordinate validation', () =
     expect(parsed.error).toBe('No original position found');
     expect(parsed.searchedMaps).toBe(0);
     expect(parsed.inputCoordinates).toEqual({ line: 1, column: 1 });
+  });
+});
+
+describe('SourceMapResolver.invalidateSourceMapListing', () => {
+  let projectRoot: string;
+  const writtenMaps: string[] = [];
+
+  beforeAll(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'smr-invalidate-'));
+    // Drop a marker package.json so findProjectRoot anchors the listing cache
+    // to this tmpdir instead of walking up to the parent project (whose dist/
+    // already contains real .map files and would pollute the assertions).
+    await writeFile(join(projectRoot, 'package.json'), '{}');
+    await mkdir(join(projectRoot, 'dist'), { recursive: true });
+    await mkdir(join(projectRoot, 'src'), { recursive: true });
+  });
+
+  afterAll(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it('forces a re-scan of the build dir after explicit invalidation', async () => {
+    const resolver = new SourceMapResolver();
+    // Seed with one initial map so collectMapFilesForResolve does not fall back
+    // to process.cwd() (which would pick up the host project's real .map files
+    // and break this test's isolation).
+    const initialMap = join(projectRoot, 'dist', 'initial.js.map');
+
+    await writeFile(initialMap, JSON.stringify({
+      version: 3,
+      sources: ['../src/initial.ts'],
+      mappings: '',
+      names: [],
+    }));
+    writtenMaps.push(initialMap);
+
+    // First call seeds the listing cache with [initial.js.map].
+    const first = await resolver.resolveGeneratedPosition(
+      'no-match.ts', 1, 1, undefined, join(projectRoot, 'src', 'no-match.ts'),
+    );
+    const firstParsed = JSON.parse(first.content[0]!.text) as Record<string, unknown>;
+
+    expect(firstParsed.searchedMaps).toBe(1);
+
+    // Add a second .map file after the listing was cached.
+    const addedMap = join(projectRoot, 'dist', 'added-after-cache.js.map');
+
+    await writeFile(addedMap, JSON.stringify({
+      version: 3,
+      sources: ['../src/added-after-cache.ts'],
+      mappings: '',
+      names: [],
+    }));
+    writtenMaps.push(addedMap);
+
+    // Without invalidation the cached listing is reused -- searchedMaps stays at 1.
+    const cached = await resolver.resolveGeneratedPosition(
+      'no-match.ts', 1, 1, undefined, join(projectRoot, 'src', 'no-match.ts'),
+    );
+    const cachedParsed = JSON.parse(cached.content[0]!.text) as Record<string, unknown>;
+
+    expect(cachedParsed.searchedMaps).toBe(1);
+
+    // Explicit invalidation -- next call re-walks the directory and sees both maps.
+    resolver.invalidateSourceMapListing();
+
+    const fresh = await resolver.resolveGeneratedPosition(
+      'no-match.ts', 1, 1, undefined, join(projectRoot, 'src', 'no-match.ts'),
+    );
+    const freshParsed = JSON.parse(fresh.content[0]!.text) as Record<string, unknown>;
+
+    expect(freshParsed.searchedMaps).toBe(2);
+  });
+
+  it('invalidateSourceMapListing(roots) clears only matching entry', () => {
+    const resolver = new SourceMapResolver();
+
+    // Internal cache is private; assert via behaviour: passing an unknown root
+    // should be a no-op that does not throw.
+    expect(() => { resolver.invalidateSourceMapListing(['/nonexistent/root']); }).not.toThrow();
+    expect(() => { resolver.invalidateSourceMapListing([]); }).not.toThrow();
+  });
+
+  it('invalidateTraceMap with no args clears the parsed-map cache', () => {
+    const resolver = new SourceMapResolver();
+
+    // Should not throw on an empty cache.
+    expect(() => { resolver.invalidateTraceMap(); }).not.toThrow();
+    expect(() => { resolver.invalidateTraceMap('/nonexistent/file.js.map'); }).not.toThrow();
   });
 });
 

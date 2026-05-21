@@ -607,6 +607,44 @@ export class SourceMapResolver {
     return undefined;
   }
 
+  /**
+   * Drop the cached directory listing of `.js.map` files. Use after a known
+   * rebuild when waiting up to {@link SOURCE_MAP_LISTING_TTL_MS} for the TTL
+   * to expire is not acceptable -- e.g. an AI agent that just triggered a
+   * build and immediately wants to set a breakpoint on the freshly emitted
+   * file. Passing `roots` clears only matching entries; passing nothing
+   * clears the whole listing cache. The parsed trace-map cache is keyed by
+   * mtime+size and self-invalidates per file, so it stays intact.
+   */
+  invalidateSourceMapListing(roots?: string[]): void {
+    if (roots === undefined) {
+      this.sourceMapListingCache.clear();
+
+      return;
+    }
+
+    const targetKey = safeStringify([...roots].sort());
+
+    this.sourceMapListingCache.delete(targetKey);
+  }
+
+  /**
+   * Drop the parsed {@link TraceMap} cache entry for a single `.map` file, or
+   * the whole cache when no argument is passed. The cache is already keyed by
+   * mtime+size, so callers rarely need this -- it exists for tests and for
+   * recovery from cases where an upstream tool rewrote a map atomically with
+   * the same size+mtime.
+   */
+  invalidateTraceMap(mapFile?: string): void {
+    if (mapFile === undefined) {
+      this.traceMapCache.clear();
+
+      return;
+    }
+
+    this.traceMapCache.delete(mapFile);
+  }
+
   private suggestSimilarSources(
     availableSources: Array<{ sourceMap: string; sources: string[] }>,
     originalSource: string,
