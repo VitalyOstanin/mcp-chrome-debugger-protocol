@@ -95,6 +95,20 @@ type VariableHandle =
   | { kind: 'scope'; frameIndex: number; scopeIndex: number; objectId?: string }
   | { kind: 'object'; objectId: string };
 
+/**
+ * One-shot DAP adapter for a single debug session.
+ *
+ * Lifecycle contract: every attach creates a fresh NodeJSDebugAdapter via
+ * DAPClient.attachToProcess. The adapter is never reused across sessions --
+ * disconnectRequest tears down the live CDP/process state, but the surviving
+ * instance must be discarded and replaced rather than re-attached. This keeps
+ * session-scoped state (id counters, breakpoint/script maps, error tallies)
+ * from leaking across sessions even if a stale reference is held somewhere.
+ *
+ * disconnectRequest still clears its own state defensively so a future bug
+ * that violates the one-shot contract surfaces as missing breakpoints rather
+ * than cross-session id collisions or zombie script ids.
+ */
 export class NodeJSDebugAdapter extends DebugSession {
   // Re-exposed locally so call sites read NodeJSDebugAdapter.THREAD_ID instead
   // of pulling in DEFAULT_THREAD_ID at every reference. Both literals are the
@@ -1339,9 +1353,25 @@ export class NodeJSDebugAdapter extends DebugSession {
       this.cdpTransport = null;
     }
 
+    // Defense-in-depth state reset. The adapter is one-shot (see class JSDoc),
+    // but clearing session-scoped state here ensures that any future code path
+    // that does reuse the instance starts from a clean slate instead of
+    // inheriting id counters, breakpoint/script maps, or exception state from
+    // the previous session.
     this.currentCallFrames = [];
     this.variableHandles.clear();
     this.lastException = null;
+    this.breakpoints.clear();
+    this.breakpointSourceMapResolutions.clear();
+    this.scriptsByUrl.clear();
+    this.scriptsByBasename.clear();
+    this.scriptsById.clear();
+    this.eventErrorCounts.clear();
+    this.nextBreakpointId = 1;
+    this.nextVariableHandleId = 1;
+    this.nextSyntheticCdpId = 1;
+    this.nextExceptionId = 1;
+    this.exceptionPauseState = 'none';
 
     // Do NOT delegate to super.disconnectRequest here. DebugSession's default
     // implementation calls this.shutdown(), which in non-server mode invokes
