@@ -736,6 +736,15 @@ export class NodeJSDebugAdapter extends DebugSession {
           ...(data !== undefined ? { exception: data } : {}),
         };
       }
+    } else {
+      // Clear stale exception data on non-exception pauses. Otherwise an earlier
+      // Runtime.exceptionThrown that was caught (no exception pause follows)
+      // would leave lastException set, and the next pause (step / breakpoint /
+      // user pause) would surface that stale data via exceptionInfo. The
+      // resumed handler clears it too, but a sequence like exceptionThrown ->
+      // (caught, no resume because we were never paused) -> later pause skips
+      // that path.
+      this.lastException = null;
     }
 
     let reason: string;
