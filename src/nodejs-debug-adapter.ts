@@ -122,6 +122,12 @@ export class NodeJSDebugAdapter extends DebugSession {
 
   private nodeProcess: ChildProcess | null = null;
   private readonly breakpoints = new Map<string, NodeJSRuntimeBreakpoint[]>();
+  // Reverse index: dapId -> file path. removeBreakpointByDapId used to scan
+  // every entry in `breakpoints` to find the owning file (O(total bp count)).
+  // The index keeps that lookup O(1) and is kept in sync at every write to
+  // `breakpoints` (setBreakPointsRequest, removeBreakpointByDapId,
+  // clearCDPBreakpoints, disconnectRequest).
+  private readonly dapIdToPath = new Map<number, string>();
   // Resolution metadata keyed by DAP id, captured during placeSingleBreakpoint.
   // Lets DAPDebuggerManager track the TS->JS hop without re-running the (cached
   // but not free) resolveSourceMapPosition pass for every actual breakpoint.
@@ -1203,6 +1209,17 @@ export class NodeJSDebugAdapter extends DebugSession {
         }
       }
 
+      // Sync the reverse index before swapping the file's entry: drop old
+      // dapId mappings for this path, then add the new ones. We can't blindly
+      // remove every dapId pointing at `path` from the previous list because
+      // buildBreakpointEntry may have *reused* a dapId; the explicit two-step
+      // (delete previous + set current) handles both stability and changes.
+      for (const prev of this.breakpoints.get(path) ?? []) {
+        if (prev.dapId !== undefined) this.dapIdToPath.delete(prev.dapId);
+      }
+      for (const next of runtimeBreakpoints) {
+        if (next.dapId !== undefined) this.dapIdToPath.set(next.dapId, path);
+      }
       this.breakpoints.set(path, runtimeBreakpoints);
 
       response.success = true;
@@ -1240,35 +1257,45 @@ export class NodeJSDebugAdapter extends DebugSession {
   // Remove a single breakpoint by its DAP id without affecting siblings in the same file.
   // Sends Debugger.removeBreakpoint for one CDP id and prunes the runtime map entry.
   async removeBreakpointByDapId(dapId: number): Promise<{ removed: boolean; filePath?: string }> {
-    for (const [filePath, list] of this.breakpoints.entries()) {
-      const index = list.findIndex(bp => bp.dapId === dapId);
+    const filePath = this.dapIdToPath.get(dapId);
 
-      if (index < 0) continue;
-
-      const [bp] = list.splice(index, 1) as [NodeJSRuntimeBreakpoint];
-
-      if (this.cdpTransport && bp.verified) {
-        try {
-          await this.cdpTransport.sendCommand("Debugger.removeBreakpoint", {
-            breakpointId: bp.id,
-          });
-        } catch (error) {
-          this.diagnostic(
-            `Failed to remove breakpoint ${bp.id}: ${errorMessage(error)}\n`,
-          );
-        }
-      }
-
-      this.breakpointSourceMapResolutions.delete(dapId);
-
-      if (list.length === 0) {
-        this.breakpoints.delete(filePath);
-      }
-
-      return { removed: true, filePath };
+    if (filePath === undefined) {
+      return { removed: false };
     }
 
-    return { removed: false };
+    const list = this.breakpoints.get(filePath);
+    const index = list?.findIndex(bp => bp.dapId === dapId) ?? -1;
+
+    if (!list || index < 0) {
+      // Index points at a path with no matching entry -- self-heal and report
+      // the breakpoint as already gone instead of leaking a stale mapping.
+      this.dapIdToPath.delete(dapId);
+
+      return { removed: false };
+    }
+
+    const [bp] = list.splice(index, 1) as [NodeJSRuntimeBreakpoint];
+
+    if (this.cdpTransport && bp.verified) {
+      try {
+        await this.cdpTransport.sendCommand("Debugger.removeBreakpoint", {
+          breakpointId: bp.id,
+        });
+      } catch (error) {
+        this.diagnostic(
+          `Failed to remove breakpoint ${bp.id}: ${errorMessage(error)}\n`,
+        );
+      }
+    }
+
+    this.breakpointSourceMapResolutions.delete(dapId);
+    this.dapIdToPath.delete(dapId);
+
+    if (list.length === 0) {
+      this.breakpoints.delete(filePath);
+    }
+
+    return { removed: true, filePath };
   }
 
   /**
@@ -1411,6 +1438,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     this.lastException = null;
     this.breakpoints.clear();
     this.breakpointSourceMapResolutions.clear();
+    this.dapIdToPath.clear();
     this.scriptsByUrl.clear();
     this.scriptsByBasename.clear();
     this.scriptsById.clear();
