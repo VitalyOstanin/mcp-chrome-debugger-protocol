@@ -40,6 +40,29 @@
 - If no tests cover the change (new functionality), propose creating a new integration or unit test and add it alongside the feature.
 - Resource limits in `vitest*.config.ts` (`maxWorkers: '10%'` for unit, `maxWorkers: 1` + `fileParallelism: false` for integration) are intentional. Do not raise them.
 
+### Split coverage: unit vs integration
+Both suites are required; they catch different classes of bug.
+
+**Unit tests (`src/*.test.ts`, `npm test`)** -- in-process, no spawned debuggee, no real CDP/WebSocket. Belong here:
+- Pure logic and data structures (`ring-buffer.test.ts`, `tool-state-manager.test.ts`).
+- Coordinate-system validation, error envelopes, schema validation, basename and path-normalisation rules.
+- Cache lifecycle and eviction behaviour for `SourceMapResolver` (mtime/size cache hit, listing TTL/invalidation, basename index updates).
+- Logpoint expression formatting (`logpoint.test.ts`) and benchmark guards (`logpoint.bench.ts`).
+- Edge cases that are awkward or slow to reproduce against a real V8: stale-handle rejection, late `setPaused(true)` after disconnect.
+
+Catches: regressions in pure code paths, off-by-one boundaries, cache invalidation bugs, refactors that silently change behaviour.
+
+**Integration tests (`tests/integration/*.test.ts`, `npm run test:integration`)** -- spawn the fixture under `tests/fixtures/test-app/` with `--inspect`, attach over real CDP through the MCP server. Belong here:
+- Breakpoint placement and hit detection on real V8 (`setBreakpointByUrl`, hit/unverify on script reload).
+- Stepping, pause/resume, stackTrace/scopes/variables snapshots while paused.
+- Logpoint delivery end-to-end (CDP `Runtime.addBinding` -> bindingCalled -> MCP notification).
+- Source-map resolution against actually-emitted `dist/*.js.map` files.
+- Reconnect/teardown flows (SIGTERM/SIGKILL fallback, transport disconnect, listener cleanup).
+
+Catches: protocol-level mismatches between adapter and V8, races between CDP events and our state machine, source-map regressions tied to real build output.
+
+Rule of thumb: if the test needs to observe a V8 behaviour (line numbers in stepping, real `Runtime.evaluate`, real source maps), it belongs in integration. If the test only needs to verify our own logic (input validation, cache semantics, formatting), it belongs in unit -- which runs in ~1 second versus ~150 seconds for integration.
+
 ## Commit & Pull Request Guidelines
 - Commits: Imperative, concise subject; describe why and what (scope-based messages welcome).
 - PRs: Include purpose, summary of changes, testing notes, and links to issues. Add reproduction steps and screenshots/logs for debugger flows where useful.
