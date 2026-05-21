@@ -802,7 +802,17 @@ export class NodeJSDebugAdapter extends DebugSession {
   }
 
   private breakpointKey(line: number, column: number | undefined, condition: string | undefined, logMessage: string | undefined): string {
-    return `${line}|${column ?? 0}|${condition ?? ''}|${logMessage ?? ''}`;
+    // Distinguish absent (undefined) from explicitly empty ('') for condition
+    // and logMessage. Previously both collapsed to the same key, which made
+    // a breakpoint with no condition look identical to a breakpoint with an
+    // empty-string condition during snapshotPreviousDapIds, causing the wrong
+    // dapId to be reused. 'U' marks "undefined", 'S:' marks a present
+    // string value (including the empty string). Every user-supplied
+    // string is prefixed with 'S:', so it can never collide with 'U'.
+    const c = condition === undefined ? 'U' : `S:${condition}`;
+    const m = logMessage === undefined ? 'U' : `S:${logMessage}`;
+
+    return `${line}|${column ?? 0}|${c}|${m}`;
   }
 
   // Resolve TS source positions through source maps; for non-TS or when no map, returns input unchanged.
