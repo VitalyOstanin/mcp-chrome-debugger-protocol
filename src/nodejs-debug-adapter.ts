@@ -12,7 +12,7 @@ import {
 import type { DebugProtocol } from '@vscode/debugprotocol';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CDPTransport, type CDPConnection } from './cdp-transport.js';
 import type { Protocol } from 'devtools-protocol';
 import { SourceMapResolver } from './source-map-resolver.js';
@@ -260,6 +260,35 @@ export class NodeJSDebugAdapter extends DebugSession {
       if (bucket.size === 0) {
         this.scriptsByBasename.delete(basename);
       }
+    }
+
+    // The script may be re-parsed under a new scriptId (re-import, HMR);
+    // the CDP breakpoint id we stored is no longer addressable, and the
+    // breakpoint will not re-apply on the new script without re-setBreakpoints.
+    // Mark verified=false so DAPDebuggerManager / clients see the stale state
+    // instead of trusting a breakpoint that is no longer live in V8.
+    this.markBreakpointsUnverifiedForUrl(event.url);
+  }
+
+  private markBreakpointsUnverifiedForUrl(scriptUrl: string): void {
+    let filePath: string | undefined;
+
+    if (scriptUrl.startsWith("file://")) {
+      try {
+        filePath = fileURLToPath(scriptUrl);
+      } catch {
+        return;
+      }
+    } else {
+      filePath = scriptUrl;
+    }
+
+    const list = this.breakpoints.get(filePath);
+
+    if (!list) return;
+
+    for (const bp of list) {
+      bp.verified = false;
     }
   }
 
