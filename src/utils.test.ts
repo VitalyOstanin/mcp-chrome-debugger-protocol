@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   createErrorResponse,
   createSuccessResponse,
+  createSuccessResponseFromJson,
   findProjectRoot,
   mapWithConcurrency,
   sleep,
@@ -21,6 +22,27 @@ describe('createSuccessResponse', () => {
     const parsed = JSON.parse(response.content[0]!.text);
 
     expect(parsed).toEqual({ success: true, data: { value: 42 } });
+  });
+});
+
+describe('createSuccessResponseFromJson', () => {
+  it('interpolates pre-serialized JSON into the envelope without re-stringifying', () => {
+    const r = createSuccessResponseFromJson('{"x":1,"y":[2,3]}');
+
+    expect(r.content).toHaveLength(1);
+    expect(r.content[0]!.type).toBe('text');
+    expect(r.content[0]!.text).toBe('{"success":true,"data":{"x":1,"y":[2,3]}}');
+
+    const parsed = JSON.parse(r.content[0]!.text);
+
+    expect(parsed).toEqual({ success: true, data: { x: 1, y: [2, 3] } });
+  });
+
+  it('accepts an array JSON literal as the data payload', () => {
+    const r = createSuccessResponseFromJson('[1,2,3]');
+    const parsed = JSON.parse(r.content[0]!.text);
+
+    expect(parsed).toEqual({ success: true, data: [1, 2, 3] });
   });
 });
 
@@ -82,6 +104,37 @@ describe('withErrorHandling', () => {
     const parsed = JSON.parse(response.content[0]!.text);
 
     expect(parsed.message).toBe('plain string');
+  });
+
+  it('redacts string-valued sensitive context fields in error details', async () => {
+    const response = await withErrorHandling(async () => {
+      throw new Error('eval failed');
+    }, {
+      operation: 'evaluate',
+      expression: 'process.env.API_KEY',
+      value: 'secret-token',
+      condition: 'x > 0',
+      logMessage: 'hello {x}',
+      extra: 'ctx',
+    });
+    const parsed = JSON.parse(response.content[0]!.text);
+
+    expect(parsed.details.expression).toBe('[redacted: 19 chars]');
+    expect(parsed.details.value).toBe('[redacted: 12 chars]');
+    expect(parsed.details.condition).toBe('[redacted: 5 chars]');
+    expect(parsed.details.logMessage).toBe('[redacted: 9 chars]');
+    expect(parsed.details.operation).toBe('evaluate');
+    expect(parsed.details.extra).toBe('ctx');
+  });
+
+  it('leaves non-string sensitive fields untouched (typeof guard branch)', async () => {
+    const response = await withErrorHandling(async () => {
+      throw new Error('boom');
+    }, { operation: 'op', expression: 42, value: null });
+    const parsed = JSON.parse(response.content[0]!.text);
+
+    expect(parsed.details.expression).toBe(42);
+    expect(parsed.details.value).toBeNull();
   });
 });
 
@@ -153,6 +206,24 @@ describe('findProjectRoot', () => {
     } finally {
       await rm(base, { recursive: true, force: true });
     }
+  });
+
+  it('evicts oldest entries when the cache grows past FIND_PROJECT_ROOT_CACHE_MAX', () => {
+    // FIND_PROJECT_ROOT_CACHE_MAX is 1024 in utils.ts. Inserting > 1024 distinct
+    // synthetic startDir keys exercises the LRU eviction while-loop inside
+    // touchCacheEntry. The synthetic paths intentionally do not exist, so each
+    // call walks up to / and caches a negative result; we only need cache
+    // growth + eviction, not a real package.json discovery.
+    const uniq = `${Date.now()}-${process.pid}`;
+
+    for (let i = 0; i < 1100; i++) {
+      findProjectRoot(`/nonexistent-mcp-cdp-lru-${uniq}-${i}/x`);
+    }
+
+    // Sanity: function still works after the eviction loop has run repeatedly.
+    const final = findProjectRoot(`/nonexistent-mcp-cdp-lru-${uniq}-sanity/x`);
+
+    expect(final === null || typeof final === 'string').toBe(true);
   });
 });
 

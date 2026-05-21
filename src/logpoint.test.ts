@@ -203,6 +203,19 @@ describe('buildLogpointExpression injection hardening', () => {
     expect(message).toBe('a {} b');
   });
 
+  it('drops whitespace-only placeholders silently (defensive idx===-1 branch)', () => {
+    // PLACEHOLDER_RE matches `{ }` (single space inside braces), but
+    // extractLogpointPlaceholders trims and filters empty strings, leaving
+    // exprs=[]. The replace callback then sees expr=' ', trims to '', and
+    // exprs.indexOf('') returns -1, falling through to the defensive `return ''`
+    // guard. This documents that the two regex passes can drift in edge cases
+    // and the build does not crash when it happens.
+    const { message, vars } = runExprSafely('a { } b');
+
+    expect(message).toBe('a  b');
+    expect(vars).toEqual({});
+  });
+
   it('source uses positional keys exclusively for __vars lookups regardless of input', () => {
     // Source-level check: the positional design must keep every __vars lookup
     // restricted to the __vN identifier pattern even when the placeholder
