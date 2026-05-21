@@ -94,3 +94,122 @@ describe('buildLogpointExpression', () => {
     expect(expr).not.toContain('__vars["a[\\"k\\"]"]');
   });
 });
+
+describe('buildLogpointExpression injection hardening', () => {
+  // The generated JS is interpolated into a CDP Debugger.setBreakpoint
+  // `condition`. The runtime must:
+  //   1. Run the IIFE successfully even when the user-supplied logMessage
+  //      contains characters that look like JS source (backticks, ${...},
+  //      backslashes, quotes).
+  //   2. Carry the literal characters back through the __mcpLogPoint payload
+  //      as part of `message`, not as evaluated JS.
+  // Each case below builds the IIFE, evaluates it in a `new Function` sandbox,
+  // and asserts both that no exception escapes and that the rendered message
+  // equals the literal input minus the {placeholder} substitutions.
+  const runExprSafely = (logMessage: string, vars: Record<string, unknown> = {}): {
+    message: string;
+    vars: Record<string, unknown>;
+    rawSource: string;
+  } => {
+    const exprSrc = buildLogpointExpression(logMessage);
+    const calls: string[] = [];
+    const argNames = ['__mcpLogPoint', ...Object.keys(vars)];
+    const argValues: unknown[] = [(s: string) => { calls.push(s); }, ...Object.values(vars)];
+    const fn = new Function(...argNames, `return ${exprSrc}`) as (...a: unknown[]) => boolean;
+    const ret = fn(...argValues);
+
+    expect(ret).toBe(false);
+    expect(calls).toHaveLength(1);
+
+    const payload = JSON.parse(calls[0]!) as { message: string; vars: Record<string, unknown> };
+
+    return { message: payload.message, vars: payload.vars, rawSource: exprSrc };
+  };
+
+  it('escapes a lone $ that is not followed by a placeholder', () => {
+    // A bare `$` (no following `{`) must land in the message as literal `$`,
+    // not be interpreted as the start of a template interpolation by V8 when
+    // it runs the IIFE.
+    const { message } = runExprSafely('cost $42');
+
+    expect(message).toBe('cost $42');
+  });
+
+  it('rejects backtick-injected template literals in the message body', () => {
+    // A naive build would close the wrapping template literal here.
+    const { message } = runExprSafely('a `+globalThis.X+` b');
+
+    expect(message).toBe('a `+globalThis.X+` b');
+  });
+
+  it('handles a backslash before a backtick (escape-table edge case)', () => {
+    const { message } = runExprSafely('x\\`y');
+
+    expect(message).toBe('x\\`y');
+  });
+
+  it('handles a backslash before a dollar (escape-table edge case)', () => {
+    const { message } = runExprSafely('x\\$y');
+
+    expect(message).toBe('x\\$y');
+  });
+
+  it('handles a literal $-not-placeholder inside a longer message body', () => {
+    // Confirms the escape of bare `$` survives surrounding text in both
+    // directions; nothing should be evaluated by the IIFE.
+    const { message } = runExprSafely('price was $100 then $200');
+
+    expect(message).toBe('price was $100 then $200');
+  });
+
+  it('handles double-quote inside a placeholder expression without breaking the IIFE', () => {
+    // Old positional-key design risk: if the key escape were quotes-only,
+    // a `\` before `"` would have closed the key string. Wire format keys are
+    // JSON.stringify-quoted at build time so they survive any inner quotes.
+    const { message, vars } = runExprSafely('value={obj["k"]}', {
+      obj: { k: 42 },
+    });
+
+    expect(message).toBe('value=42');
+    expect(vars).toEqual({ 'obj["k"]': 42 });
+  });
+
+  it('handles backslash inside a string-valued placeholder without breaking the IIFE', () => {
+    // String values flow through JSON.stringify in the runtime payload; a
+    // backslash inside the value must round-trip without breaking the
+    // surrounding template.
+    const { message, vars } = runExprSafely('s={s}', { s: 'a\\b' });
+
+    expect(message).toBe('s=a\\b');
+    expect(vars).toEqual({ s: 'a\\b' });
+  });
+
+  it('returns undefined for a placeholder expression that throws at evaluation time', () => {
+    // The IIFE wraps each expression in try/catch returning undefined. A
+    // crafted expression that throws via a thrower function must still resolve
+    // to undefined and the whole logpoint must run cleanly.
+    const { vars } = runExprSafely('value={t()}', {
+      t() { throw new Error('boom'); },
+    });
+
+    expect(vars).toEqual({ 't()': undefined });
+  });
+
+  it('preserves a literal {} segment (no expression inside) after escape rules', () => {
+    // Stand-alone braces with no matching expr should be left as-is since
+    // PLACEHOLDER_RE requires non-empty content.
+    const { message } = runExprSafely('a {} b');
+
+    expect(message).toBe('a {} b');
+  });
+
+  it('source uses positional keys exclusively for __vars lookups regardless of input', () => {
+    // Source-level check: the positional design must keep every __vars lookup
+    // restricted to the __vN identifier pattern even when the placeholder
+    // text contains characters that would once have been mis-escaped.
+    const exprSrc = buildLogpointExpression('z={x.y}');
+
+    expect(exprSrc).not.toMatch(/__vars\["[^"]/);
+    expect(exprSrc).toMatch(/__vars\.__v0/);
+  });
+});
