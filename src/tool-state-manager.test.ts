@@ -85,6 +85,14 @@ describe('ToolStateManager.isToolEnabled rules', () => {
     expect(m.isToolEnabled('next')).toBe(true);
   });
 
+  it('setBreakpointsBatch: requires connection like setBreakpoints', () => {
+    const m = new ToolStateManager();
+
+    expect(m.isToolEnabled('setBreakpointsBatch')).toBe(false);
+    m.setConnection(true);
+    expect(m.isToolEnabled('setBreakpointsBatch')).toBe(true);
+  });
+
   it('utility tools (getDebuggerState) are always enabled', () => {
     const m = new ToolStateManager();
 

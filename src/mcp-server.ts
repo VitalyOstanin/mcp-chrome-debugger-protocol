@@ -345,6 +345,56 @@ export class NodeDebuggerMCPServer {
     );
 
     this.server.registerTool(
+      "setBreakpointsBatch",
+      {
+        title: "Set Breakpoints (Batch)",
+        description: "Set breakpoints across multiple source files in a single call. Each file entry is processed in parallel (capped at 4 concurrent files) using the same source-map resolution and tracking as setBreakpoints. Failures in one file do not block the others; per-file outcomes are returned alongside a summary tally. Use this on session start to seed many breakpoints faster than sequential setBreakpoints calls.",
+        inputSchema: {
+          files: z.array(z.object({
+            source: z.object({
+              path: z.string().describe("Absolute file path to source code file"),
+            }).describe("Source file information"),
+            breakpoints: z.array(z.object({
+              line: lineNumberSchema,
+              column: columnNumberSchema.optional(),
+              condition: z.string().optional().describe("Conditional expression for breakpoint (optional)."),
+              logMessage: z.string().optional().describe("Log message for logpoint (optional). Supports {expr} placeholders."),
+            })).optional().describe("Array of breakpoints to set for this file"),
+            lines: z.array(lineNumberSchema).optional().describe("Simple array of line numbers (alternative to breakpoints array)"),
+          })).min(1).describe("Array of per-file breakpoint specifications (one entry per source file)"),
+        },
+      },
+      async ({ files }) => {
+        return this.runGatedTool("setBreakpointsBatch", async () => {
+          const result = await this.debuggerManager.setBreakpointsBatch(files);
+
+          // Fire one notification per file using the same shape as setBreakpoints
+          // so existing notification listeners do not need a batch-aware code path.
+          try {
+            const parsed = JSON.parse(result.content[0]!.text);
+
+            if (parsed.success && Array.isArray(parsed.data?.files)) {
+              for (const entry of parsed.data.files as Array<{ source: string; response: { success?: boolean; data?: { breakpoints?: unknown[] } } }>) {
+                if (entry.response.success && entry.response.data?.breakpoints) {
+                  this.sendBreakpointNotification('breakpoint_set', {
+                    source: entry.source,
+                    breakpoints: entry.response.data.breakpoints,
+                  });
+                }
+              }
+            }
+          } catch {
+            // Best-effort notifications: if parsing fails the per-file responses
+            // are still returned in the MCP envelope; the client can drive its
+            // own state from those.
+          }
+
+          return result;
+        });
+      },
+    );
+
+    this.server.registerTool(
       "removeBreakpoint",
       {
         title: "Remove Breakpoint",

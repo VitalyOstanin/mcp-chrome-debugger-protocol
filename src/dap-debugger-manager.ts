@@ -1,6 +1,6 @@
 import type { DAPClient } from "./dap-client.js";
 import type { TruncationOptions } from "./types.js";
-import { findProjectRoot, withErrorHandling } from "./utils.js";
+import { findProjectRoot, mapWithConcurrency, withErrorHandling } from "./utils.js";
 import { NotFoundError, ProtocolError } from "./errors.js";
 import { DEFAULTS, DEFAULT_THREAD_ID } from "./constants.js";
 import type { DebugProtocol } from '@vscode/debugprotocol';
@@ -482,6 +482,84 @@ export class DAPDebuggerManager {
         source: source.path,
       };
     }, { operation: 'set breakpoints', source: source.path, count: breakpoints?.length ?? lines?.length });
+  }
+
+  /**
+   * Set breakpoints across multiple source files in parallel. Each file is
+   * routed through {@link setBreakpoints} (so source-map resolution, tracking,
+   * and verification all behave identically to single-file placement); the
+   * fan-out is capped at 4 concurrent files to stay within the DAP request
+   * pipeline budget on the adapter.
+   *
+   * Returns one envelope per input file in input order, plus an aggregate
+   * `summary` so callers do not have to walk the array twice. Individual
+   * files that fail surface as `{ success: false, error, code }` entries
+   * inside the per-file array -- a failure in one file does not block the
+   * others.
+   */
+  async setBreakpointsBatch(
+    files: Array<{
+      source: { path: string };
+      breakpoints?: Array<{
+        line: number;
+        column?: number | undefined;
+        condition?: string | undefined;
+        logMessage?: string | undefined;
+      }> | undefined;
+      lines?: number[] | undefined;
+    }>,
+  ) {
+    return withErrorHandling(async () => {
+      const perFile = await mapWithConcurrency(files, 4, async (entry) => {
+        const result = await this.setBreakpoints(entry.source, entry.breakpoints, entry.lines);
+        // Re-hydrate the inner SuccessResponse/ErrorResponse so callers can read
+        // per-file outcomes without re-parsing the wire envelope themselves.
+        const text = result.content[0]?.text ?? '';
+
+        try {
+          const parsed = JSON.parse(text) as unknown;
+
+          return {
+            source: entry.source.path,
+            response: parsed,
+          };
+        } catch (parseError) {
+          return {
+            source: entry.source.path,
+            response: {
+              success: false,
+              error: 'Failed to parse setBreakpoints response',
+              code: 'BATCH_PARSE_FAILED',
+              details: { message: String(parseError) },
+            },
+          };
+        }
+      });
+      let succeeded = 0;
+      let failed = 0;
+      let totalBreakpoints = 0;
+
+      for (const entry of perFile) {
+        const r = entry.response as { success?: boolean; data?: { breakpoints?: unknown[] } };
+
+        if (r.success === true) {
+          succeeded += 1;
+          totalBreakpoints += r.data?.breakpoints?.length ?? 0;
+        } else {
+          failed += 1;
+        }
+      }
+
+      return {
+        files: perFile,
+        summary: {
+          totalFiles: files.length,
+          succeeded,
+          failed,
+          totalBreakpoints,
+        },
+      };
+    }, { operation: 'set breakpoints batch', fileCount: files.length });
   }
 
   async getBreakpoints() {

@@ -27,6 +27,7 @@ const TOOL_RULES: Record<string, ToolRule> = {
 
   // Breakpoint management - require connection
   'setBreakpoints': { requiresConnection: true },
+  'setBreakpointsBatch': { requiresConnection: true },
   'removeBreakpoint': { requiresConnection: true },
   'getBreakpoints': { requiresConnection: true },
   'setExceptionBreakpoints': { requiresConnection: true },
