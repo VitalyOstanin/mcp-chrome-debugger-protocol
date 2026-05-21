@@ -126,6 +126,7 @@ local.json
 
 # Claude
 .claude/
+.claude-dir-settings.yaml
 
 # Build scripts and generated files
 src/generated/*
