@@ -116,7 +116,9 @@ claude mcp remove chrome-debugger-protocol --scope user
 
 Run this server only in a trusted local environment (developer workstation, IDE, CI sandbox owned by you). It is **not** designed to sit behind a public proxy or be shared between mutually-distrusting clients.
 
-A connected MCP client is effectively root inside the target Node.js process: `evaluate`, `setBreakpoints` with `condition`, and logpoint `{expr}` placeholders all execute arbitrary JavaScript in the debuggee by design. `attach` refuses non-loopback hosts unless `MCP_CDP_ALLOW_REMOTE=1` is set. Logpoint hits are buffered (FIFO, up to 10 000 entries) and returned on demand — avoid logpoints over secrets/PII.
+A connected MCP client is effectively root inside the target Node.js process: `evaluate`, `setBreakpoints` with `condition`, and logpoint `{expr}` placeholders all execute arbitrary JavaScript in the debuggee by design. `attach` refuses non-loopback hosts unless `MCP_CDP_ALLOW_REMOTE=1` is set; when that environment variable is enabled the server prints a stderr warning at startup so a leftover override is hard to miss. Logpoint hits are buffered (FIFO, up to 10 000 entries) and returned on demand — avoid logpoints over secrets/PII.
+
+On Linux, when the server is started as root and `attach` is called with a pid, the target's real uid is read from `/proc/<pid>/status` and the call is refused if the process is owned by another user — kill(pid, 0) succeeds for any pid when uid 0 is the caller, so the explicit uid check is what stops SIGUSR1 from disturbing a foreign user's daemon.
 
 See [docs/SECURITY.md](docs/SECURITY.md) for the full threat model, trust boundaries, mitigations, operational guidance, and the vulnerability reporting process.
 
