@@ -726,12 +726,18 @@ export class DAPClient extends EventEmitter {
     // so a caller passing 0 still gets a single best-effort lookup instead of
     // silently returning undefined without ever probing.
     do {
-      const results = await Promise.all(
+      // probeInspector currently catches its own errors and returns boolean,
+      // but if a future refactor lets it throw, Promise.all would abort the
+      // whole round on the first rejection and lose the other candidates'
+      // results. Promise.allSettled keeps the round resilient by design.
+      const settled = await Promise.allSettled(
         candidates.map(async (cand) => ({ cand, ok: await this.probeInspector(cand, probeTimeoutMs) })),
       );
-      const hit = results.find((r) => r.ok);
+      const hit = settled
+        .filter((r): r is PromiseFulfilledResult<{ cand: number; ok: boolean }> => r.status === 'fulfilled')
+        .find((r) => r.value.ok);
 
-      if (hit) return hit.cand;
+      if (hit) return hit.value.cand;
 
       if (Date.now() >= deadline) break;
       await sleep(delayMs);
