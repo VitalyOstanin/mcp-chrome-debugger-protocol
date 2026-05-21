@@ -357,6 +357,10 @@ export class DAPClient extends EventEmitter {
         request_seq: requestId,
         command: 'attach',
         success: true,
+        // Propagate non-fatal attach warnings (e.g. failed
+        // Runtime.addBinding for logpoints) through the DAP body so
+        // attachToProcess can include them in the MCP response.
+        ...(attachResult.warnings.length > 0 ? { body: { warnings: attachResult.warnings } } : {}),
       };
     },
     launch: (_adapter, params, requestId) => this.buildLaunchResponse(requestId, params as NodeJSLaunchRequestArguments),
@@ -1029,14 +1033,23 @@ export class DAPClient extends EventEmitter {
       // Attach to the Node.js process. The 'attach' handler in dapHandlers already
       // toggles connection state on success; do not duplicate emitStateChange here
       // or every subscriber will get two notifications per attach.
+      const {adapter} = this.connection;
+
       await this.sendRequest('attach', {
         port: args.port ?? DEFAULTS.INSPECTOR_PORT,
         address: args.address ?? DEFAULTS.INSPECTOR_CLIENT_HOST,
       });
 
+      // Surface non-fatal attach warnings (e.g. failed Runtime.addBinding
+      // installation, which silently disables logpoint delivery until the
+      // CDP transport reconnects) so MCP clients can see the degradation
+      // without enabling DAP_VERBOSE.
+      const warnings = adapter.getAttachWarnings();
+
       return createSuccessResponse({
         message: `Attached to Node.js process on ${args.address ?? DEFAULTS.INSPECTOR_CLIENT_HOST}:${args.port ?? DEFAULTS.INSPECTOR_PORT}`,
         protocol: 'DAP',
+        ...(warnings.length > 0 ? { warnings } : {}),
       });
     } catch (error) {
       // initialize / attach failed: dispose the freshly created adapter so the

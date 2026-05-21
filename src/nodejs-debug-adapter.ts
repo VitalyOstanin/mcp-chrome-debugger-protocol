@@ -199,6 +199,11 @@ export class NodeJSDebugAdapter extends DebugSession {
   private lastException: Protocol.Runtime.ExceptionDetails | null = null;
   private nextExceptionId = 1;
   private exceptionPauseState: 'none' | 'caught' | 'uncaught' | 'all' = 'none';
+  // Non-fatal warnings produced during doAttach. Read via getAttachWarnings()
+  // after a successful attach so DAPClient can include them in the MCP
+  // response envelope -- currently used for Runtime.addBinding failures,
+  // which silently disable logpoint delivery but do not block the session.
+  private attachWarnings: string[] = [];
 
   private async getScriptIdForPath(
     targetPath: string,
@@ -456,18 +461,28 @@ export class NodeJSDebugAdapter extends DebugSession {
   }
 
   // Public wrapper: perform attach without VS Code request plumbing
-  public async attach(args: NodeJSAttachRequestArguments): Promise<{ success: boolean; message?: string }> {
+  public async attach(args: NodeJSAttachRequestArguments): Promise<{ success: boolean; message?: string; warnings: string[] }> {
+    this.attachWarnings = [];
     try {
       await this.doAttach(args);
 
-      return { success: true, message: "attached" };
+      return { success: true, message: "attached", warnings: [...this.attachWarnings] };
     } catch (error) {
       this.sendEvent(
         new OutputEvent(`Attach failed: ${errorMessage(error)}\n`, "stderr"),
       );
 
-      return { success: false, message: errorMessage(error) };
+      return { success: false, message: errorMessage(error), warnings: [...this.attachWarnings] };
     }
+  }
+
+  /**
+   * Snapshot of non-fatal warnings produced by the most recent attach() call.
+   * DAPClient reads this after a successful attach to surface degradations
+   * (e.g. failed Runtime.addBinding installation) through the MCP response.
+   */
+  public getAttachWarnings(): string[] {
+    return [...this.attachWarnings];
   }
 
   // Shared attach logic (DRY)
@@ -487,21 +502,21 @@ export class NodeJSDebugAdapter extends DebugSession {
     // Enable necessary CDP domains
     await this.cdpTransport.enableDomains(["Runtime", "Debugger", "Console", "Profiler"]);
 
-    // Install a binding for logpoints before any breakpoints are set
+    // Install a binding for logpoints before any breakpoints are set.
+    // Failures are non-fatal: the session continues, but logpoints will not
+    // deliver bindingCalled events. Record a warning so DAPClient can
+    // surface it through the attach MCP response (otherwise the failure is
+    // only visible via the console OutputEvent that DAP_VERBOSE shows).
     try {
       await this.cdpTransport.sendCommand(
         "Runtime.addBinding",
         { name: "__mcpLogPoint" },
       );
     } catch (error) {
-      this.sendEvent(
-        new OutputEvent(
-          `Failed to install Runtime.addBinding for logpoints: ${
-            errorMessage(error)
-          }\n`,
-          "console",
-        ),
-      );
+      const warning = `Failed to install Runtime.addBinding for logpoints: ${errorMessage(error)}. Logpoints will not deliver until a successful reconnect re-installs the binding.`;
+
+      this.attachWarnings.push(warning);
+      this.sendEvent(new OutputEvent(`${warning}\n`, "console"));
     }
 
     this.sendEvent(
@@ -1389,6 +1404,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     this.nextExceptionId = 1;
     this.pauseEpoch = 0;
     this.exceptionPauseState = 'none';
+    this.attachWarnings = [];
 
     // Do NOT delegate to super.disconnectRequest here. DebugSession's default
     // implementation calls this.shutdown(), which in non-server mode invokes
