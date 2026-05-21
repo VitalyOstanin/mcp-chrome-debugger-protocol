@@ -16,72 +16,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { readFile } from 'node:fs/promises';
 import { posix as pathPosix } from 'node:path';
 import http from 'node:http';
-
-// Bounded FIFO buffer with O(1) push and amortised O(1) drop-oldest. The previous
-// implementation used Array.splice(0, n), which is O(n) on every overflow and
-// dominated CPU under high logpoint hit rates.
-class RingBuffer<T> {
-  private items: Array<T | undefined>;
-  private head = 0;
-  private size = 0;
-
-  constructor(private readonly capacity: number) {
-    this.items = new Array<T | undefined>(capacity);
-  }
-
-  push(item: T): void {
-    const tail = (this.head + this.size) % this.capacity;
-
-    this.items[tail] = item;
-    if (this.size < this.capacity) {
-      this.size++;
-    } else {
-      // Drop the oldest entry by advancing head; the slot just written becomes the newest.
-      this.head = (this.head + 1) % this.capacity;
-    }
-  }
-
-  toArray(): T[] {
-    return this.slice(0, this.size);
-  }
-
-  // Logical-order paginated read: [offset, offset+limit). offset>=size returns [].
-  // Callers can avoid materialising the entire buffer just to look at a tail or
-  // a window — important for getLogpointHits/getDebuggerEvents where the wire
-  // payload would otherwise grow with MAX_BUFFER_SIZE regardless of need.
-  slice(offset: number, limit: number): T[] {
-    if (offset < 0) offset = 0;
-    if (limit < 0) limit = 0;
-
-    const start = Math.min(offset, this.size);
-    const end = Math.min(this.size, start + limit);
-    const out: T[] = new Array<T>(end - start);
-
-    for (let i = start; i < end; i++) {
-      const item = this.items[(this.head + i) % this.capacity];
-
-      if (item === undefined) {
-        // Invariant: push() only ever writes T, and we read exactly `size` slots
-        // starting at `head`. Reaching this branch means push() was bypassed
-        // (corrupted internal state) — fail loudly instead of leaking undefined.
-        throw new Error(`RingBuffer invariant violated: missing item at logical index ${i}`);
-      }
-      out[i - start] = item;
-    }
-
-    return out;
-  }
-
-  get length(): number {
-    return this.size;
-  }
-
-  clear(): void {
-    this.items = new Array<T | undefined>(this.capacity);
-    this.head = 0;
-    this.size = 0;
-  }
-}
+import { RingBuffer } from './ring-buffer.js';
 
 export interface DAPConnection {
   adapter: NodeJSDebugAdapter | null;
