@@ -9,6 +9,7 @@ import { ToolStateManager, type ToolStateInfo } from "./tool-state-manager.js";
 import { DEFAULTS, INSPECTOR_PORT_RANGE } from "./constants.js";
 import { logError } from "./logger.js";
 import { packageManifest } from "./package-manifest.js";
+import { getProcessEventCounters } from "./process-event-counters.js";
 
 // Shared Zod schemas. Both lines and columns are 1-based on the MCP/DAP
 // boundary (see docs/coordinates.md).
@@ -577,6 +578,10 @@ export class NodeDebuggerMCPServer {
                 // Operators can spot silent regressions without enabling
                 // DAP_VERBOSE on a hot session.
                 eventErrorCounts: this.dapClient.getAdapterEventErrorCounts(),
+                // Top-level process event counters (currently just
+                // unhandledRejection). Non-zero values indicate background
+                // async failures that did not reach a tool response.
+                processEventCounts: getProcessEventCounters(),
               }, undefined, 2) ?? '',
             },
           ],

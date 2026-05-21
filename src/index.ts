@@ -3,6 +3,7 @@
 import { NodeDebuggerMCPServer } from "./mcp-server.js";
 import { logError } from "./logger.js";
 import { packageManifest } from "./package-manifest.js";
+import { incrementUnhandledRejection } from "./process-event-counters.js";
 
 // Fire-and-forget paths exist throughout the codebase (CDP event handlers,
 // `void this.cdpTransport.sendCommand(...)` in nodejs-debug-adapter, async
@@ -22,6 +23,7 @@ process.on('uncaughtException', (error: Error) => {
 });
 
 process.on('unhandledRejection', (reason: unknown) => {
+  incrementUnhandledRejection();
   logError('Unhandled promise rejection', reason);
 });
 
