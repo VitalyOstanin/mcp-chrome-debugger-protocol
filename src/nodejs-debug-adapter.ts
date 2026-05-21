@@ -604,22 +604,27 @@ export class NodeJSDebugAdapter extends DebugSession {
         break;
       }
       case "Runtime.executionContextCreated": {
-        // Ensure our binding exists in newly created execution contexts as well
-        try {
-          const params = event.params as Protocol.Runtime.ExecutionContextCreatedEvent;
+        // Ensure our binding exists in newly created execution contexts as well.
+        // The previous code wrapped a `void promise` in try/catch, which only
+        // catches synchronous throws from kicking off sendCommand -- the actual
+        // CDP rejection slipped past the catch and showed up later as an
+        // unhandledRejection (counted by the global handler, but not tied back
+        // to this event). Attach a .catch so the rejection lands in our event
+        // error counter on the same call path.
+        const params = event.params as Protocol.Runtime.ExecutionContextCreatedEvent;
+        const transport = this.cdpTransport;
 
-          if (this.cdpTransport) {
-            void this.cdpTransport.sendCommand(
-              "Runtime.addBinding",
-              { name: "__mcpLogPoint", executionContextId: params.context.id },
-            );
-          }
-        } catch (error) {
-          // addBinding can race a context being torn down before we install
-          // the binding; fall through silently. New contexts retry on their
-          // own executionContextCreated event.
-          this.bumpEventErrorCount('Runtime.executionContextCreated');
-          this.diagnostic(`Runtime.addBinding for new context failed: ${errorMessage(error)}`);
+        if (transport) {
+          transport.sendCommand(
+            "Runtime.addBinding",
+            { name: "__mcpLogPoint", executionContextId: params.context.id },
+          ).catch((error: unknown) => {
+            // addBinding can race a context being torn down before we install
+            // the binding; we record but do not retry -- a still-alive context
+            // will produce another executionContextCreated event on its own.
+            this.bumpEventErrorCount('Runtime.executionContextCreated');
+            this.diagnostic(`Runtime.addBinding for new context failed: ${errorMessage(error)}`);
+          });
         }
         break;
       }
