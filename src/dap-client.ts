@@ -850,19 +850,42 @@ export class DAPClient extends EventEmitter {
   }
 
   async attachToProcess(args: { port?: number; address?: string }): Promise<MCPResponse> {
-    try {
-      const host = args.address ?? DEFAULTS.INSPECTOR_CLIENT_HOST;
+    const host = args.address ?? DEFAULTS.INSPECTOR_CLIENT_HOST;
 
-      if (!this.isLoopbackHost(host) && process.env.MCP_CDP_ALLOW_REMOTE !== '1') {
-        return createErrorResponse(
-          'Remote inspector attach blocked',
-          `Refusing to attach to non-loopback host '${host}'. ` +
-          'Set MCP_CDP_ALLOW_REMOTE=1 to allow remote inspector connections.',
-          'CDP_REMOTE_BLOCKED',
-          { host },
-        );
+    if (!this.isLoopbackHost(host) && process.env.MCP_CDP_ALLOW_REMOTE !== '1') {
+      return createErrorResponse(
+        'Remote inspector attach blocked',
+        `Refusing to attach to non-loopback host '${host}'. ` +
+        'Set MCP_CDP_ALLOW_REMOTE=1 to allow remote inspector connections.',
+        'CDP_REMOTE_BLOCKED',
+        { host },
+      );
+    }
+
+    // Refuse to clobber an active session; require explicit disconnect first.
+    if (this.connection.isConnected) {
+      return createErrorResponse(
+        'Already attached',
+        'A previous attach session is still active. Call disconnect first.',
+        'ALREADY_ATTACHED',
+        { host },
+      );
+    }
+
+    // Stale adapter from a prior failed attach: tear it down before creating
+    // a new one so wrapped sendEvent / cdpTransport listeners do not leak and
+    // late terminated events do not fire on the new connection.
+    if (this.connection.adapter) {
+      try {
+        await this.connection.adapter.disconnect();
+      } catch (error) {
+        logError('Stale adapter disconnect during attachToProcess (best-effort)', error);
       }
 
+      this.connection.adapter = null;
+    }
+
+    try {
       // Create new debug adapter instance
       this.connection.adapter = new NodeJSDebugAdapter();
       this.setupAdapterEventHandlers(this.connection.adapter);
@@ -891,6 +914,18 @@ export class DAPClient extends EventEmitter {
         protocol: 'DAP',
       });
     } catch (error) {
+      // initialize / attach failed: dispose the freshly created adapter so the
+      // wrapped sendEvent and any cdpTransport listeners do not stay around.
+      if (this.connection.adapter) {
+        try {
+          await this.connection.adapter.disconnect();
+        } catch (cleanupError) {
+          logError('Adapter cleanup after attach failure (best-effort)', cleanupError);
+        }
+
+        this.connection.adapter = null;
+      }
+
       return createErrorResponse(
         'Failed to attach to process',
         errorMessage(error),
