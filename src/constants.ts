@@ -97,6 +97,19 @@ export const INSPECTOR_PORT_RANGE = {
 // adapter-private". Keep them here so the inline `1001..1009` magic numbers
 // don't get reused inconsistently and so the matching DAP doc strings can be
 // kept next to the value.
+//
+// Scope: these codes are emitted ONLY from request handlers in
+// NodeJSDebugAdapter (launchRequest, attachRequest, setBreakpointsRequest, the
+// execution-control trampoline runCdpExecutionCommand and its callers). The
+// public DAPClient/DAPDebuggerManager surface does NOT use DAP error codes --
+// it returns the MCPResponse envelope produced by withErrorHandling, which
+// carries the typed error class name from src/errors.ts (NotConnectedError,
+// ValidationError, ProtocolError, ...) in the `code` field instead.
+//
+// When a new sendErrorResponse call site is added inside NodeJSDebugAdapter,
+// allocate the next free number above 1009, give it a SCREAMING_SNAKE_CASE
+// name with a _FAILED or _REQUIRED suffix, and reference it via
+// DAP_ERROR_CODES.<NAME> instead of an inline literal.
 export const DAP_ERROR_CODES = {
   LAUNCH_PROGRAM_REQUIRED: 1001,
   LAUNCH_FAILED: 1002,
