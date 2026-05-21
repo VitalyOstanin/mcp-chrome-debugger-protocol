@@ -254,6 +254,15 @@ export class NodeJSDebugAdapter extends DebugSession {
   private indexScriptUrl(url: string, scriptId: string): void {
     this.scriptsByUrl.set(url, scriptId);
 
+    // Only index by basename when the URL looks like a real source file path.
+    // Synthetic URLs from eval / vm / `node:internal` (e.g. `vm:module/foo`,
+    // `evalmachine.<anonymous>`, `<anonymous>`, `node:internal/process/...`)
+    // would otherwise pollute the basename lookup -- a user-supplied
+    // breakpoint on `foo.ts` could silently bind to vm-bridge code that
+    // happens to share the basename. Direct-URL/scriptId reachability stays
+    // unaffected because we still set scriptsByUrl above.
+    if (!NodeJSDebugAdapter.looksLikeFileSourceUrl(url)) return;
+
     // URLs always use '/' so split-pop and basename are equivalent here, but
     // path.basename also handles backslashes that creep in from Windows-style
     // file:// URLs on Windows hosts.
@@ -265,6 +274,19 @@ export class NodeJSDebugAdapter extends DebugSession {
 
     bucket.add(url);
     this.scriptsByBasename.set(basename, bucket);
+  }
+
+  // file:// URLs and bare absolute paths (POSIX and Windows) are real source
+  // files. Everything else -- `vm:`, `evalmachine.`, `<anonymous>`,
+  // `node:internal/...` -- is synthetic and must not pollute the basename
+  // index that user breakpoint placements consult.
+  private static looksLikeFileSourceUrl(url: string): boolean {
+    if (url.startsWith('file://')) return true;
+    if (url.startsWith('/')) return true;
+    // Windows drive letter: C:\... or C:/...
+    if (/^[A-Za-z]:[\\/]/.test(url)) return true;
+
+    return false;
   }
 
   // Drop the oldest cached script and the URL/basename index entries pointing
@@ -291,6 +313,11 @@ export class NodeJSDebugAdapter extends DebugSession {
       if (this.scriptsByUrl.get(url) === scriptId) {
         this.scriptsByUrl.delete(url);
       }
+
+      // Mirror indexScriptUrl: only file-shaped URLs were added to the
+      // basename index, so only those need basename cleanup. Synthetic URLs
+      // never entered scriptsByBasename and have nothing to remove here.
+      if (!NodeJSDebugAdapter.looksLikeFileSourceUrl(url)) continue;
 
       const basename = pathBasename(url);
 
