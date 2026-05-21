@@ -1717,6 +1717,15 @@ export class NodeJSDebugAdapter extends DebugSession {
     args: DebugProtocol.BreakpointLocationsArguments,
   ): Promise<DebugProtocol.BreakpointLocationsResponse> {
     const path = args.source.path ?? '';
+
+    // An empty source.path would otherwise resolve to pathToFileURL(''),
+    // which never matches a real script and burns the full lookup timeout
+    // before returning an empty list. Fail fast with ValidationError so the
+    // caller gets a structured message instead of a silent 200ms stall.
+    if (path === '') {
+      throw new ValidationError('breakpointLocations: source.path is required');
+    }
+
     const scriptId = await this.getScriptIdForPath(path, DEFAULTS.BREAKPOINT_LOCATIONS_LOOKUP_TIMEOUT_MS);
 
     if (!scriptId) {
