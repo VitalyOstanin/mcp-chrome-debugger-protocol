@@ -1,6 +1,6 @@
 import { TraceMap, originalPositionFor, generatedPositionFor, LEAST_UPPER_BOUND } from "@jridgewell/trace-mapping";
 import { readFile, stat, readdir, access } from "node:fs/promises";
-import { dirname, join, resolve as resolvePath } from "node:path";
+import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import safeStringify from "safe-stable-stringify";
 import { findProjectRoot, errorMessage } from "./utils.js";
 import { BUILD_DIRS, SOURCE_DIR_MARKER } from "./constants.js";
@@ -132,14 +132,17 @@ export class SourceMapResolver {
       for (const source of traceMap.sources) {
         if (!source) continue;
 
-        const basename = source.split('/').pop() ?? '';
+        // Source-map source paths use '/' per spec; basename() handles that
+        // case and (on Windows) also normalises backslashes if a source map
+        // ever emitted them.
+        const sourceBase = basename(source);
 
-        if (!basename) continue;
+        if (!sourceBase) continue;
 
-        const bucket = sourcesByBasename.get(basename) ?? [];
+        const bucket = sourcesByBasename.get(sourceBase) ?? [];
 
         bucket.push(source);
-        sourcesByBasename.set(basename, bucket);
+        sourcesByBasename.set(sourceBase, bucket);
       }
 
       const entry: CachedTraceMap = {
@@ -238,7 +241,7 @@ export class SourceMapResolver {
 
     const baseRoot = normalised.substring(0, idx);
     const fileBase = normalised.substring(idx + SOURCE_DIR_MARKER.length);
-    const baseName = fileBase.split('/').pop() ?? '';
+    const baseName = basename(fileBase);
 
     if (!baseName) return [];
 
@@ -572,7 +575,7 @@ export class SourceMapResolver {
     originalSourcePath?: string,
   ): string | undefined {
     const normalizedOriginal = originalSource.replace(/\\/g, '/');
-    const originalBaseName = normalizedOriginal.split('/').pop() ?? '';
+    const originalBaseName = basename(normalizedOriginal);
 
     if (!originalBaseName) return undefined;
 
@@ -608,7 +611,7 @@ export class SourceMapResolver {
     availableSources: Array<{ sourceMap: string; sources: string[] }>,
     originalSource: string,
   ): string[] {
-    const originalBaseName = originalSource.split('/').pop() ?? '';
+    const originalBaseName = basename(originalSource);
 
     if (!originalBaseName) return [];
 
@@ -616,7 +619,7 @@ export class SourceMapResolver {
 
     for (const entry of availableSources) {
       for (const source of entry.sources) {
-        const sourceBaseName = source.split('/').pop() ?? '';
+        const sourceBaseName = basename(source);
 
         if (
           sourceBaseName.includes(originalBaseName) ||

@@ -12,6 +12,7 @@ import {
 import type { DebugProtocol } from '@vscode/debugprotocol';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { setTimeout as sleep, setTimeout as setTimeoutP } from 'node:timers/promises';
+import { basename as pathBasename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CDPTransport, type CDPConnection } from './cdp-transport.js';
 import type { Protocol } from 'devtools-protocol';
@@ -196,7 +197,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     // index so we don't iterate over scriptsByUrl (which can hold 1000+ entries
     // for typical Node processes).
     if (!scriptId) {
-      const base = targetPath.split("/").pop();
+      const base = pathBasename(targetPath);
 
       if (base) {
         const candidateUrls = this.scriptsByBasename.get(base);
@@ -222,7 +223,10 @@ export class NodeJSDebugAdapter extends DebugSession {
   private indexScriptUrl(url: string, scriptId: string): void {
     this.scriptsByUrl.set(url, scriptId);
 
-    const basename = url.split("/").pop();
+    // URLs always use '/' so split-pop and basename are equivalent here, but
+    // path.basename also handles backslashes that creep in from Windows-style
+    // file:// URLs on Windows hosts.
+    const basename = pathBasename(url);
 
     if (!basename) return;
 
@@ -257,7 +261,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         this.scriptsByUrl.delete(url);
       }
 
-      const basename = url.split("/").pop();
+      const basename = pathBasename(url);
 
       if (!basename) continue;
 
@@ -1027,7 +1031,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     }
 
     const actualBp = new Breakpoint(verified, line, column);
-    const sourceName = path.split("/").pop();
+    const sourceName = pathBasename(path);
 
     // The @vscode/debugadapter Breakpoint helper does not surface `source` and
     // `id` on its public type, even though DebugProtocol.Breakpoint requires
@@ -1035,7 +1039,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     // call sites stay type-safe.
     assignDapBreakpointFields(actualBp, {
       source: {
-        ...(sourceName !== undefined ? { name: sourceName } : {}),
+        ...(sourceName ? { name: sourceName } : {}),
         path,
       },
       id: dapId,
@@ -1438,7 +1442,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         line: frame.location.lineNumber + 1,
         column: (frame.location.columnNumber ?? 0) + 1,
         ...(sourcePath
-          ? { source: { name: sourcePath.split('/').pop() ?? sourcePath, path: sourcePath } }
+          ? { source: { name: pathBasename(sourcePath) || sourcePath, path: sourcePath } }
           : {}),
       };
     });
@@ -1649,7 +1653,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       const path = url.startsWith('file://') ? url.replace(/^file:\/\//, '') : url;
 
       sources.push({
-        name: path.split('/').pop() ?? path,
+        name: pathBasename(path) || path,
         path,
       });
     }

@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 import { setTimeout as scheduleTimeout } from 'node:timers';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { readFile } from 'node:fs/promises';
+import { posix as pathPosix } from 'node:path';
 import http from 'node:http';
 
 // Bounded FIFO buffer with O(1) push and amortised O(1) drop-oldest. The previous
@@ -860,9 +861,11 @@ export class DAPClient extends EventEmitter {
         const trimmed = stdout.trim();
         // ps may return the full executable path on darwin (e.g. /usr/bin/node);
         // take the basename so the regex match parity with /proc/<pid>/comm.
-        const basename = trimmed.split('/').pop() ?? trimmed;
+        // Use posix.basename: darwin uses '/' regardless of where the binary
+        // is run from.
+        const psBase = pathPosix.basename(trimmed) || trimmed;
 
-        settle(basename === '' ? undefined : basename);
+        settle(psBase === '' ? undefined : psBase);
       });
     });
   }
