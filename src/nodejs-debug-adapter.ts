@@ -91,9 +91,14 @@ interface NodeJSRuntimeBreakpoint {
   logMessage?: string | undefined;
 }
 
+// `epoch` carries the pauseEpoch snapshot captured at allocateHandle time.
+// variables/setVariable reject handles whose epoch != the current pauseEpoch
+// so a stale handle from a previous Debugger.paused (the id space is reset
+// to 1 on every pause -- see handleDebuggerPaused) cannot accidentally
+// resolve to a new scope with the same numeric ref.
 type VariableHandle =
-  | { kind: 'scope'; frameIndex: number; scopeIndex: number; objectId?: string }
-  | { kind: 'object'; objectId: string };
+  | { kind: 'scope'; frameIndex: number; scopeIndex: number; objectId?: string; epoch: number }
+  | { kind: 'object'; objectId: string; epoch: number };
 
 /**
  * One-shot DAP adapter for a single debug session.
@@ -185,6 +190,12 @@ export class NodeJSDebugAdapter extends DebugSession {
   private currentCallFrames: Protocol.Debugger.CallFrame[] = [];
   private readonly variableHandles = new Map<number, VariableHandle>();
   private nextVariableHandleId = 1;
+  // Monotonic snapshot id incremented on every Debugger.paused. Variable
+  // handles carry the epoch at allocation time so variables/setVariable can
+  // reject stale references from a previous pause (the handle id space
+  // resets to 1 on every pause, so a stale ref could otherwise be silently
+  // mapped to a freshly-allocated handle with the same numeric value).
+  private pauseEpoch = 0;
   private lastException: Protocol.Runtime.ExceptionDetails | null = null;
   private nextExceptionId = 1;
   private exceptionPauseState: 'none' | 'caught' | 'uncaught' | 'all' = 'none';
@@ -675,7 +686,12 @@ export class NodeJSDebugAdapter extends DebugSession {
   }
 
   private handleDebuggerPaused(params: Protocol.Debugger.PausedEvent): void {
-    // Persist runtime state for evaluate/stackTrace/scopes/variables before raising the event
+    // Persist runtime state for evaluate/stackTrace/scopes/variables before raising the event.
+    // Bump the pauseEpoch *before* clearing the handle map so that any handle
+    // allocated by scopes/variables during this pause carries the new epoch
+    // and stale handles from the previous pause are rejected by id+epoch
+    // comparison (the handle id space is reset below).
+    this.pauseEpoch += 1;
     this.currentCallFrames = params.callFrames;
     this.variableHandles.clear();
     this.nextVariableHandleId = 1;
@@ -1371,6 +1387,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     this.nextVariableHandleId = 1;
     this.nextSyntheticCdpId = 1;
     this.nextExceptionId = 1;
+    this.pauseEpoch = 0;
     this.exceptionPauseState = 'none';
 
     // Do NOT delegate to super.disconnectRequest here. DebugSession's default
@@ -1398,6 +1415,20 @@ export class NodeJSDebugAdapter extends DebugSession {
     this.variableHandles.set(id, handle);
 
     return id;
+  }
+
+  // Resolve a variablesReference, rejecting handles whose pause-epoch no
+  // longer matches the current pause. Callers that operate strictly on
+  // paused-state data (scopes/variables/setVariable) should use this instead
+  // of variableHandles.get to avoid silently mapping a stale reference into
+  // a freshly-allocated handle from a later pause.
+  private resolveVariableHandle(reference: number): VariableHandle | undefined {
+    const handle = this.variableHandles.get(reference);
+
+    if (!handle) return undefined;
+    if (handle.epoch !== this.pauseEpoch) return undefined;
+
+    return handle;
   }
 
   private remoteObjectToString(remote: Protocol.Runtime.RemoteObject): string {
@@ -1456,6 +1487,12 @@ export class NodeJSDebugAdapter extends DebugSession {
     });
   }
 
+  /**
+   * Read the current call stack. Valid only while the debuggee is paused --
+   * currentCallFrames is reset on Debugger.resumed, so a stackTrace call
+   * issued after continue/step will return an empty list. Frame ids are
+   * positional within this response and become meaningless across pauses.
+   */
   public stackTrace(args: DebugProtocol.StackTraceArguments): DebugProtocol.StackTraceResponse {
     const startFrame = args.startFrame ?? 0;
     const levels = args.levels && args.levels > 0 ? args.levels : this.currentCallFrames.length;
@@ -1483,6 +1520,12 @@ export class NodeJSDebugAdapter extends DebugSession {
     });
   }
 
+  /**
+   * List scopes for a frame. Valid only while paused. Each allocated
+   * variablesReference is bound to the current pauseEpoch; subsequent
+   * variables/setVariable calls on a stale reference will throw NotFound
+   * after the next Debugger.paused (see resolveVariableHandle).
+   */
   public scopes(args: DebugProtocol.ScopesArguments): DebugProtocol.ScopesResponse {
     // currentCallFrames is only populated by Debugger.paused. If the debuggee
     // is running, return an empty scopes list (with a clear name) instead of
@@ -1503,6 +1546,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         kind: 'scope',
         frameIndex: args.frameId,
         scopeIndex,
+        epoch: this.pauseEpoch,
         ...(scope.object.objectId !== undefined ? { objectId: scope.object.objectId } : {}),
       });
       const presentationHint = scope.type === 'local' ? 'locals' : undefined;
@@ -1519,11 +1563,21 @@ export class NodeJSDebugAdapter extends DebugSession {
     return this.okResponse<DebugProtocol.ScopesResponse>('scopes', { scopes: dapScopes });
   }
 
+  /**
+   * Resolve a variablesReference returned by scopes/variables/evaluate to a
+   * property list. The reference is valid only within the pause that
+   * produced it; resolveVariableHandle rejects mismatched pauseEpoch with
+   * NotFoundError so a stale ref cannot silently bind to a new scope.
+   */
   public async variables(args: DebugProtocol.VariablesArguments): Promise<DebugProtocol.VariablesResponse> {
-    const handle = this.variableHandles.get(args.variablesReference);
+    const handle = this.resolveVariableHandle(args.variablesReference);
 
     if (!handle) {
-      throw new NotFoundError(`Variable reference ${args.variablesReference} not found`);
+      // The variableHandles map is cleared on every Debugger.paused and the
+      // id space starts at 1, so a stale reference could otherwise collide
+      // with a freshly-allocated handle. resolveVariableHandle rejects
+      // mismatched epochs so the caller gets a clear NotFound instead.
+      throw new NotFoundError(`Variable reference ${args.variablesReference} not found (stale or unknown)`);
     }
 
     const {objectId} = handle;
@@ -1546,7 +1600,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       .map(prop => {
         const remote = prop.value;
         const childRef = remote?.objectId
-          ? this.allocateHandle({ kind: 'object', objectId: remote.objectId })
+          ? this.allocateHandle({ kind: 'object', objectId: remote.objectId, epoch: this.pauseEpoch })
           : 0;
 
         return {
@@ -1605,7 +1659,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     }
 
     const reference = remote.objectId
-      ? this.allocateHandle({ kind: 'object', objectId: remote.objectId })
+      ? this.allocateHandle({ kind: 'object', objectId: remote.objectId, epoch: this.pauseEpoch })
       : 0;
 
     return this.okResponse<DebugProtocol.EvaluateResponse>('evaluate', {
@@ -1618,7 +1672,10 @@ export class NodeJSDebugAdapter extends DebugSession {
   public async setVariable(
     args: DebugProtocol.SetVariableArguments,
   ): Promise<DebugProtocol.SetVariableResponse> {
-    const handle = this.variableHandles.get(args.variablesReference);
+    // resolveVariableHandle rejects stale-epoch references the same way as
+    // variables(); without that check a ref from a previous pause could
+    // resolve to a scope handle freshly allocated for a different frame.
+    const handle = this.resolveVariableHandle(args.variablesReference);
 
     if (handle?.kind !== 'scope') {
       throw new ValidationError('setVariable is only supported on scope references');
@@ -1660,7 +1717,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     });
 
     const childRef = evalResult.result.objectId
-      ? this.allocateHandle({ kind: 'object', objectId: evalResult.result.objectId })
+      ? this.allocateHandle({ kind: 'object', objectId: evalResult.result.objectId, epoch: this.pauseEpoch })
       : 0;
 
     return this.okResponse<DebugProtocol.SetVariableResponse>('setVariable', {
