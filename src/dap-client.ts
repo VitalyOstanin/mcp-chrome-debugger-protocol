@@ -747,6 +747,36 @@ export class DAPClient extends EventEmitter {
    *   - { comm, looksLikeNode }: we resolved a process name; the flag says
    *     whether it matches the Node.js executable regex.
    */
+  /**
+   * Linux-only: read the real UID of pid from /proc/<pid>/status. Returns
+   * undefined on non-Linux, on a missing/unreadable procfs entry, or when the
+   * status file omits the Uid line. Used by enableDebuggerPid as an extra
+   * defense when running as root, where the kill(pid, 0) permission check
+   * cannot tell foreign daemons apart from our own children.
+   */
+  private async probeProcessOwnerUid(pid: number): Promise<number | undefined> {
+    if (process.platform !== 'linux') return undefined;
+
+    try {
+      const status = await readFile(`/proc/${pid}/status`, 'utf8');
+      // Format: "Uid:\t<real>\t<effective>\t<saved>\t<filesystem>" -- four
+      // integers tab-separated; we only need the real uid.
+      const match = /^Uid:\s+(\d+)/m.exec(status);
+
+      if (!match) return undefined;
+
+      const real = Number.parseInt(match[1]!, 10);
+
+      return Number.isFinite(real) ? real : undefined;
+    } catch (statusError) {
+      const code = (statusError as NodeJS.ErrnoException | undefined)?.code;
+
+      logVerbose('dap-client', `Could not read /proc/${pid}/status (${code ?? 'unknown'}), skipping uid check`);
+
+      return undefined;
+    }
+  }
+
   private async probeProcessNodeName(pid: number): Promise<{ comm: string; looksLikeNode: boolean } | undefined> {
     if (process.platform === 'linux') {
       try {
@@ -841,6 +871,31 @@ export class DAPClient extends EventEmitter {
           'PID_NOT_FOUND',
           { pid },
         );
+      }
+
+      // Linux-only: when running as root, kill(pid, 0) succeeds for any pid,
+      // so the permission check above does not disambiguate "our own process"
+      // from "a foreign daemon owned by another user". Read /proc/<pid>/status
+      // Uid: and refuse the attach if the real uid differs from ours. Non-root
+      // runs are protected by the kernel signal check itself. Non-Linux falls
+      // through (procfs unavailable) -- the comm/ps probe below still catches
+      // most non-Node targets.
+      const callerUid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+
+      if (callerUid === 0) {
+        const targetUid = await this.probeProcessOwnerUid(pid);
+
+        if (targetUid !== undefined && targetUid !== 0) {
+          return createErrorResponse(
+            'Refusing to attach to a process owned by another user',
+            `pid=${pid} is owned by uid=${targetUid}, but the MCP server is running as root. ` +
+            'Sending SIGUSR1 to a foreign user\'s process risks unintended side effects ' +
+            '(log reopen, state dump). Re-run the MCP server as the target user, or attach ' +
+            'directly via attach(url).',
+            'PID_OWNED_BY_OTHER_USER',
+            { pid, targetUid, callerUid },
+          );
+        }
       }
 
       // Linux / macOS: best-effort sanity check that the target looks like
