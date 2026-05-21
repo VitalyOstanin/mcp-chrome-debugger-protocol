@@ -93,7 +93,11 @@ export class CDPTransport extends EventEmitter {
     this.client.on('disconnect', () => {
       this.isConnected = false;
       this.emit('disconnected');
-      this.handleReconnection();
+      // Fire-and-forget reconnection: handleReconnection logs its own errors
+      // and the event handler signature is synchronous (CDP client expects
+      // void). Marking with `void` documents the intentional escape and
+      // satisfies @typescript-eslint/no-floating-promises.
+      void this.handleReconnection();
     });
 
     // Handle errors

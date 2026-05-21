@@ -277,8 +277,12 @@ export class TestAppManager {
       this.process!.stderr!.on('data', stderrHandler);
       this.process!.once('exit', exitHandler);
 
-      // Send SIGUSR1 to enable debugger
-      this.sendSignal("SIGUSR1");
+      // Send SIGUSR1 to enable debugger. Fire-and-forget: the surrounding
+      // Promise resolves on the inspector's "Debugger listening" stderr line
+      // (stderrHandler above), so awaiting sendSignal here would race with
+      // its own outcome. Errors from sendSignal still propagate via the
+      // exit/error handlers above.
+      void this.sendSignal("SIGUSR1");
     });
   }
 

@@ -145,6 +145,14 @@ export default [
       '@typescript-eslint/no-unnecessary-type-assertion': 'error', // Avoid unnecessary type assertions
       '@typescript-eslint/strict-boolean-expressions': 'off', // May be too strict
       '@typescript-eslint/switch-exhaustiveness-check': 'error', // Check switch exhaustiveness
+      // Project rule from CLAUDE.md: no `any` anywhere -- use unknown + type
+      // guards, generics, or proper interfaces. The rule was previously implied
+      // by review, now enforced at lint time.
+      '@typescript-eslint/no-explicit-any': 'error',
+      // Catch unawaited Promises that would otherwise swallow rejections or
+      // race with the synchronous flow. Intentional fire-and-forget paths
+      // must mark themselves with `void`.
+      '@typescript-eslint/no-floating-promises': 'error',
       
       // Modern JavaScript best practices
       'prefer-object-spread': 'error', // Prefer {...obj} over Object.assign()

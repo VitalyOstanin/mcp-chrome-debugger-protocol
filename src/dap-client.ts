@@ -365,8 +365,11 @@ export class DAPClient extends EventEmitter {
         timeout,
       });
 
-      // Dispatch to real adapter methods (no mock handlers).
-      (async () => {
+      // Dispatch to real adapter methods (no mock handlers). Fire-and-forget:
+      // outcomes are delivered through resolveRequest/rejectRequest, which
+      // settle the pending Promise. The IIFE itself returns void back to the
+      // synchronous Promise executor.
+      void (async () => {
         try {
           const {adapter} = this.connection;
 
