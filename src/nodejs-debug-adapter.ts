@@ -1422,8 +1422,12 @@ export class NodeJSDebugAdapter extends DebugSession {
     void args;
     await this.killNodeProcessWithFallback();
 
-    // Clean up CDP connection
+    // Clean up CDP connection. removeAllListeners() before disconnect() so any
+    // 'disconnected'/'error' events the transport emits during teardown do not
+    // re-enter our handlers and trigger spurious TerminatedEvent or
+    // bumpEventErrorCount calls while the adapter is already shutting down.
     if (this.cdpTransport) {
+      this.cdpTransport.removeAllListeners();
       await this.cdpTransport.disconnect();
       this.cdpTransport = null;
     }
@@ -1934,6 +1938,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     await this.killNodeProcessWithFallback();
 
     if (this.cdpTransport) {
+      this.cdpTransport.removeAllListeners();
       await this.cdpTransport.disconnect();
       this.cdpTransport = null;
     }
