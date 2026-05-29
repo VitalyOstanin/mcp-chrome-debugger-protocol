@@ -6,6 +6,7 @@ import {
   createErrorResponse,
   createSuccessResponse,
   createSuccessResponseFromJson,
+  fileUrlToPlainPath,
   findProjectRoot,
   mapWithConcurrency,
   sleep,
@@ -144,6 +145,20 @@ describe('sleep', () => {
 
     await sleep(20);
     expect(Date.now() - start).toBeGreaterThanOrEqual(15);
+  });
+});
+
+describe('fileUrlToPlainPath', () => {
+  it('strips a leading file:// scheme', () => {
+    expect(fileUrlToPlainPath('file:///abs/path/src/index.ts')).toBe('/abs/path/src/index.ts');
+  });
+
+  it('returns a plain path unchanged when there is no file:// prefix', () => {
+    expect(fileUrlToPlainPath('/abs/path/src/index.ts')).toBe('/abs/path/src/index.ts');
+  });
+
+  it('does not percent-decode the stripped path', () => {
+    expect(fileUrlToPlainPath('file:///abs/with%20space/a.ts')).toBe('/abs/with%20space/a.ts');
   });
 });
 
