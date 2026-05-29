@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-05-29
+
+### Added
+- `-V` as an alias for `--version` (alongside the existing `-v`), matching the common short-flag convention ([src/index.ts](src/index.ts)).
+- `exports` and `types` fields in `package.json`: the package declares an explicit ESM entry point (`.` -> `./dist/index.js` with a `types` condition) and no longer exposes internal `dist/` modules for deep import.
+- `Environment variables` section in [README.md](README.md) documenting `MCP_CDP_ALLOW_REMOTE`, `DAP_VERBOSE`, and the previously undocumented `MCP_LOGPOINT_BUFFER_SIZE`.
+- Architecture Decision Records under [docs/adr/](docs/adr/): ADR-0001 (adopt ADRs) and ADR-0002 (release tag policy).
+
+### Changed
+- SIGINT/SIGTERM now exit with the conventional `128 + signal` code (130 / 143) after a graceful shutdown instead of always `0`, so supervisors can distinguish a signal-driven stop from a normal exit ([src/index.ts](src/index.ts)).
+- Unknown CLI arguments now print a warning to stderr instead of being silently ignored ([src/index.ts](src/index.ts)).
+- CDP reconnect uses exponential backoff with full jitter capped at 8 s (was linear `delay * attempt`), matching the inspector-discovery poll strategy ([src/cdp-transport.ts](src/cdp-transport.ts)).
+- `findBreakpointLocationInRange` fallback breaks ties on equal line distance by nearest column instead of relying on V8's location order ([src/nodejs-debug-adapter.ts](src/nodejs-debug-adapter.ts)).
+- ESLint: migrated the deprecated core `comma-dangle` rule to `@stylistic/comma-dangle` (added `@stylistic/eslint-plugin`) and added `eqeqeq` ([eslint.config.mjs](eslint.config.mjs)).
+- Deduplicated the four `file://`-prefix strips into a single `fileUrlToPlainPath` helper and extracted `syncDapIdReverseIndex` from `setBreakPointsRequest` ([src/utils.ts](src/utils.ts), [src/nodejs-debug-adapter.ts](src/nodejs-debug-adapter.ts)).
+- `test` and `test:coverage` npm scripts are wrapped in a 5-minute GNU `timeout`, mirroring the integration runner ([package.json](package.json)).
+- Documented `setBreakpointsBatch` in the README **Available Tools** list, aligned the stated npm requirement with `engines.npm` (>=10), and corrected the logpoint buffer default from 10 000 to the actual 2 000 ([README.md](README.md)).
+
+### Fixed
+- Bumped the transitive `qs` dependency to 6.15.2, resolving the moderate DoS advisory GHSA-q8mj-m7cp-5q26 (dev/test-only, via `express`); `npm audit` reports 0 vulnerabilities ([package-lock.json](package-lock.json)).
+
 ## [1.9.0] - 2026-05-21
 
 ### Added
