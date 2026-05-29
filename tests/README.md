@@ -2,6 +2,29 @@
 
 This directory contains integration tests for the MCP Chrome Debugger Protocol server. The tests are built using [vitest](https://vitest.dev/) and exercise the server end-to-end as a real MCP client driving a real Node.js inspector debuggee.
 
+## Table of Contents
+
+- [Test Pyramid](#test-pyramid)
+- [Test Architecture](#test-architecture)
+  - [Test Structure](#test-structure)
+  - [Test Components](#test-components)
+- [Test Suites](#test-suites)
+- [Running Tests](#running-tests)
+  - [Prerequisites](#prerequisites)
+  - [Test Execution](#test-execution)
+  - [Test Configuration](#test-configuration)
+- [Key Features](#key-features)
+  - [Port Management](#port-management)
+  - [Process Management](#process-management)
+  - [Source Map Support](#source-map-support)
+  - [Error Resilience](#error-resilience)
+- [Test Data and Scenarios](#test-data-and-scenarios)
+- [Debugging the Tests](#debugging-the-tests)
+- [Contributing](#contributing)
+- [Troubleshooting](#troubleshooting)
+  - [Common Issues](#common-issues)
+  - [Performance Considerations](#performance-considerations)
+
 ## Test Pyramid
 
 Three layers, each with its own scope:

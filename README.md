@@ -86,7 +86,7 @@ flowchart LR
 ## Requirements
 
 - Node.js >= 22 (set in `engines.node`). Recommended for local development: Node 24 (pinned in `.nvmrc`). CI runs the matrix against Node 22 and 24.
-- npm >= 11 (required only for `npm publish`; everyday development works on npm 10+).
+- npm >= 10 (set in `engines.npm`). npm >= 11 is required only for `npm publish`.
 
 ## Installation
 
@@ -183,7 +183,7 @@ Reserve `DAP_VERBOSE=1` for local debugging of the adapter itself. The default (
 ## Available Tools
 
 - Connection: `attach`, `disconnect`, `restart`, `terminate`
-- Breakpoints: `setBreakpoints` (supports `logMessage`), `removeBreakpoint`, `getBreakpoints`, `setExceptionBreakpoints`, `breakpointLocations`
+- Breakpoints: `setBreakpoints` (supports `logMessage`), `setBreakpointsBatch` (set breakpoints across multiple files in parallel, capped at 4 concurrent files), `removeBreakpoint`, `getBreakpoints`, `setExceptionBreakpoints`, `breakpointLocations`
 - Execution Control: `continue`, `pause`, `next` (step over), `stepIn`, `stepOut`, `restartFrame`
 - Inspection: `evaluate`, `stackTrace`, `variables`, `scopes`, `setVariable`, `threads`, `loadedSources`, `exceptionInfo`
 - Monitoring: `getLogpointHits`, `clearLogpointHits`, `getDebuggerEvents`, `clearDebuggerEvents`, `getDebuggerState`

@@ -15,6 +15,7 @@
 - **ABSOLUTELY MANDATORY: Use modern Promise-based timers with async/await** - always use `import { setTimeout } from "node:timers/promises"` and async/await patterns instead of callback-based setTimeout
 - **ABSOLUTELY MANDATORY: NEVER use `JSON.stringify` in `src/*` - use the safe version (`safe-stable-stringify`)** - `import safeStringify from "safe-stable-stringify"` and call `safeStringify(value)` everywhere. The safe version handles circular references, gives deterministic key order, and matches the project's wire-format guarantees. This rule applies to cache keys, log messages, MCP wire format, and any other serialization. The only allowed exception is template strings that are injected into the debuggee runtime via CDP `Runtime.evaluate` (where safe-stable-stringify is not available); document such exceptions inline. `JSON.parse` remains allowed for incoming JSON.
 - **Follow ESLint rules strictly** - write code that passes linting without warnings, use `??` instead of `||`, avoid unused variables, prefer explicit types
+- **No community docs until there is a community** - do NOT add `CONTRIBUTING.md` or `CODE_OF_CONDUCT.md`. While the project has no external contributor community, these files are unnecessary; contributor guidance lives in `AGENTS.md` and the README Development section.
 
 ## Project Structure
 - Main MCP server: `src/mcp-server.ts`
