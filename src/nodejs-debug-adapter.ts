@@ -25,7 +25,7 @@ import {
   DEFAULTS,
   END_COLUMN_LARGE,
 } from './constants.js';
-import { errorMessage, mapWithConcurrency } from './utils.js';
+import { errorMessage, mapWithConcurrency, fileUrlToPlainPath } from './utils.js';
 import { NotConnectedError, NotFoundError, ProtocolError, ValidationError } from './errors.js';
 import { isVerbose } from './logger.js';
 import safeStringify from 'safe-stable-stringify';
@@ -306,7 +306,7 @@ export class NodeJSDebugAdapter extends DebugSession {
     const aliases = [event.url];
 
     if (event.url.startsWith("file://")) {
-      aliases.push(event.url.replace(/^file:\/\//, ""));
+      aliases.push(fileUrlToPlainPath(event.url));
     }
 
     for (const url of aliases) {
@@ -616,7 +616,7 @@ export class NodeJSDebugAdapter extends DebugSession {
           if (params.url.startsWith("file://")) {
             // Also map plain absolute path
             try {
-              const plain = params.url.replace(/^file:\/\//, "");
+              const plain = fileUrlToPlainPath(params.url);
 
               this.indexScriptUrl(plain, params.scriptId);
             } catch (error) {
@@ -905,9 +905,16 @@ export class NodeJSDebugAdapter extends DebugSession {
     // No statement at or beyond the requested position within the search
     // window — fall back to the nearest available statement and flag it so the
     // caller can surface a DAP Breakpoint.message explaining the shift.
-    const fallback = locs.slice().sort(
-      (a, b) => Math.abs(a.lineNumber - baseLine0) - Math.abs(b.lineNumber - baseLine0),
-    )[0];
+    // Primary key: nearest line. Tie-break on nearest column so that when a
+    // line holds several statements the fallback picks the one closest to the
+    // requested column instead of leaning on V8's arbitrary location order.
+    const fallback = locs.slice().sort((a, b) => {
+      const lineDelta = Math.abs(a.lineNumber - baseLine0) - Math.abs(b.lineNumber - baseLine0);
+
+      if (lineDelta !== 0) return lineDelta;
+
+      return Math.abs((a.columnNumber ?? 0) - baseCol0) - Math.abs((b.columnNumber ?? 0) - baseCol0);
+    })[0];
 
     if (!fallback) return undefined;
 
@@ -1212,18 +1219,7 @@ export class NodeJSDebugAdapter extends DebugSession {
         }
       }
 
-      // Sync the reverse index before swapping the file's entry: drop old
-      // dapId mappings for this path, then add the new ones. We can't blindly
-      // remove every dapId pointing at `path` from the previous list because
-      // buildBreakpointEntry may have *reused* a dapId; the explicit two-step
-      // (delete previous + set current) handles both stability and changes.
-      for (const prev of this.breakpoints.get(path) ?? []) {
-        if (prev.dapId !== undefined) this.dapIdToPath.delete(prev.dapId);
-      }
-      for (const next of runtimeBreakpoints) {
-        if (next.dapId !== undefined) this.dapIdToPath.set(next.dapId, path);
-      }
-      this.breakpoints.set(path, runtimeBreakpoints);
+      this.syncDapIdReverseIndex(path, runtimeBreakpoints);
 
       response.success = true;
       response.body = {
@@ -1237,6 +1233,23 @@ export class NodeJSDebugAdapter extends DebugSession {
         `Set breakpoints failed at stage=${stage}: ${errorMessage(error)}`,
       );
     }
+  }
+
+  /**
+   * Swap the file's breakpoint list while keeping the dapId -> path reverse
+   * index consistent. Drops the previous entries' dapId mappings first, then
+   * registers the new ones; buildBreakpointEntry may have *reused* a dapId, so
+   * the explicit delete-previous + set-current handles both stability and
+   * changes. Must run before any later lookup that relies on the reverse index.
+   */
+  private syncDapIdReverseIndex(path: string, runtimeBreakpoints: NodeJSRuntimeBreakpoint[]): void {
+    for (const prev of this.breakpoints.get(path) ?? []) {
+      if (prev.dapId !== undefined) this.dapIdToPath.delete(prev.dapId);
+    }
+    for (const next of runtimeBreakpoints) {
+      if (next.dapId !== undefined) this.dapIdToPath.set(next.dapId, path);
+    }
+    this.breakpoints.set(path, runtimeBreakpoints);
   }
 
   // Public wrapper: set breakpoints (supports logMessage)
@@ -1569,7 +1582,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       const absoluteIndex = startFrame + idx;
       const script = this.scriptsById.get(frame.location.scriptId);
       const url = script?.url ?? '';
-      const sourcePath = url.startsWith('file://') ? url.replace(/^file:\/\//, '') : url;
+      const sourcePath = fileUrlToPlainPath(url);
 
       return {
         id: absoluteIndex,
@@ -1805,7 +1818,7 @@ export class NodeJSDebugAdapter extends DebugSession {
       if (!url || seen.has(url)) continue;
       seen.add(url);
 
-      const path = url.startsWith('file://') ? url.replace(/^file:\/\//, '') : url;
+      const path = fileUrlToPlainPath(url);
 
       sources.push({
         name: pathBasename(path) || path,

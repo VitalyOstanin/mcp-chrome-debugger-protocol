@@ -185,6 +185,17 @@ export async function withErrorHandling<T>(
 export const sleep = setTimeout;
 
 /**
+ * Strip a leading `file://` scheme from a script URL, returning the plain path
+ * unchanged when no such prefix is present. This is a deliberately naive strip
+ * (not `node:url` `fileURLToPath`): it preserves the exact byte sequence used as
+ * a plain-path alias key in the script indexes, so percent-decoding must NOT be
+ * applied here. Use `fileURLToPath` instead where RFC 8089 decoding is required.
+ */
+export function fileUrlToPlainPath(url: string): string {
+  return url.startsWith("file://") ? url.replace(/^file:\/\//, "") : url;
+}
+
+/**
  * Like `Promise.all(items.map(fn))`, but caps the number of `fn` invocations
  * in flight at `limit`. Preserves input order in the returned array so the
  * caller can index back by the original position (matches Promise.all
