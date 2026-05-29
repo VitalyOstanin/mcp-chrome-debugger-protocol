@@ -22,6 +22,7 @@ Tested with Claude Code CLI.
 - [Security model](#security-model)
 - [Quick Start](#quick-start)
 - [Development](#development)
+- [Environment variables](#environment-variables)
 - [Verbose diagnostics (DAP_VERBOSE)](#verbose-diagnostics-dap_verbose)
 - [Available Tools](#available-tools)
 - [Logpoints](#logpoints)
@@ -116,7 +117,7 @@ claude mcp remove chrome-debugger-protocol --scope user
 
 Run this server only in a trusted local environment (developer workstation, IDE, CI sandbox owned by you). It is **not** designed to sit behind a public proxy or be shared between mutually-distrusting clients.
 
-A connected MCP client is effectively root inside the target Node.js process: `evaluate`, `setBreakpoints` with `condition`, and logpoint `{expr}` placeholders all execute arbitrary JavaScript in the debuggee by design. `attach` refuses non-loopback hosts unless `MCP_CDP_ALLOW_REMOTE=1` is set; when that environment variable is enabled the server prints a stderr warning at startup so a leftover override is hard to miss. Logpoint hits are buffered (FIFO, up to 10 000 entries) and returned on demand — avoid logpoints over secrets/PII.
+A connected MCP client is effectively root inside the target Node.js process: `evaluate`, `setBreakpoints` with `condition`, and logpoint `{expr}` placeholders all execute arbitrary JavaScript in the debuggee by design. `attach` refuses non-loopback hosts unless `MCP_CDP_ALLOW_REMOTE=1` is set; when that environment variable is enabled the server prints a stderr warning at startup so a leftover override is hard to miss. Logpoint hits are buffered (FIFO, up to 2 000 entries by default, configurable via `MCP_LOGPOINT_BUFFER_SIZE`) and returned on demand — avoid logpoints over secrets/PII.
 
 On Linux, when the server is started as root and `attach` is called with a pid, the target's real uid is read from `/proc/<pid>/status` and the call is refused if the process is owned by another user — kill(pid, 0) succeeds for any pid when uid 0 is the caller, so the explicit uid check is what stops SIGUSR1 from disturbing a foreign user's daemon.
 
@@ -167,6 +168,16 @@ End-to-end loop in 30 seconds: run `npm run dev:test` in one terminal (it starts
 Formatting: this project relies on ESLint plus `.editorconfig`. There is no separate `prettier` configuration. Run `npm run lint:fix` (or its alias `npm run format`) to apply style fixes. If your editor inserts conflicting formatting, configure it to defer to ESLint.
 
 See [AGENTS.md](AGENTS.md) for detailed contributor rules and project conventions.
+
+## Environment variables
+
+All environment variables are optional; the server runs with sensible defaults when none are set.
+
+| Variable                  | Type             | Default | Description                                                                                                                                              |
+|---------------------------|------------------|---------|----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `MCP_CDP_ALLOW_REMOTE`    | `1` to enable    | unset   | Allow `attach` to non-loopback hosts. Only the exact value `1` enables it; a stderr warning is printed at startup while set. See [Security model](#security-model). |
+| `DAP_VERBOSE`             | `1` / `true`     | unset   | Enable verbose adapter diagnostics on stderr and DAP `OutputEvent`s. See [Verbose diagnostics](#verbose-diagnostics-dap_verbose).                          |
+| `MCP_LOGPOINT_BUFFER_SIZE`| positive integer | `2000`  | FIFO buffer size for logpoint hits and debugger events. Non-numeric or non-positive values fall back to the default.                                       |
 
 ## Verbose diagnostics (DAP_VERBOSE)
 
