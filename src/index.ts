@@ -42,7 +42,7 @@ similar agents) which speaks JSON-RPC on stdin/stdout.
 
 Options:
   --help, -h       Print this help message and exit.
-  --version, -v    Print the version and exit.
+  --version, -V, -v Print the version and exit.
 
 Environment variables:
   DAP_VERBOSE             When set to "1" or "true", emit verbose adapter
@@ -71,10 +71,18 @@ function parseArgsAndMaybeExit(argv: string[]): void {
       printHelp();
       process.exit(0);
     }
-    if (arg === '--version' || arg === '-v') {
+    // -V is the conventional short version flag (commander/clap/GNU); -v stays
+    // for backwards compatibility.
+    if (arg === '--version' || arg === '-v' || arg === '-V') {
       process.stdout.write(`${packageManifest.version}\n`);
       process.exit(0);
     }
+    // Unknown argument: this binary is an MCP stdio server and normally gets no
+    // CLI args. Surface a typo (e.g. --versionn) on stderr instead of silently
+    // dropping through to the server, which would look like a hang while it
+    // waits for JSON-RPC on stdin. Non-fatal: a host passing an unrecognised
+    // arg still starts.
+    process.stderr.write(`Unknown argument: ${arg}. See --help.\n`);
   }
 }
 
@@ -117,10 +125,11 @@ async function main() {
       logError(`Error during shutdown on ${signal}`, error);
     }
 
-    // 128 + signal number is the standard exit code for "killed by signal";
-    // SIGINT = 2, SIGTERM = 15. We approximate by exiting 0 after a clean
-    // shutdown since the host expects a graceful close, not signal status.
-    process.exit(0);
+    // 128 + signal number is the standard exit code for "killed by signal"
+    // (SIGINT = 2 -> 130, SIGTERM = 15 -> 143). Report it so supervisors and
+    // scripts can tell a signal-driven stop from a normal exit; the shutdown
+    // itself stays graceful (stdio is closed cleanly before exiting).
+    process.exit(signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 0);
   };
 
   process.on('SIGINT', (signal) => { void shutdown(signal); });
