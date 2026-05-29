@@ -28,3 +28,4 @@ See [template.md](template.md).
 ## Index
 
 - [ADR-0001: Record architecture decisions](0001-record-architecture-decisions.md)
+- [ADR-0002: Release tag policy (no GPG signing, version-only tag body)](0002-release-tag-policy.md)
