@@ -1,5 +1,6 @@
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
+import stylistic from '@stylistic/eslint-plugin';
 
 export default [
   {
@@ -71,6 +72,7 @@ export default [
     },
     plugins: {
       '@typescript-eslint': tseslint.plugin,
+      '@stylistic': stylistic,
     },
     rules: {
       // Mandatory rules from project requirements
@@ -84,6 +86,7 @@ export default [
       'no-var': 'error',
       'prefer-const': 'error',
       'prefer-template': 'error',
+      'eqeqeq': ['error', 'always'], // Require strict equality, guard against regressions
 
       // Blank lines around returns and declarations
       'padding-line-between-statements': [
@@ -160,8 +163,9 @@ export default [
       'prefer-rest-params': 'error', // Prefer ...args over arguments
       'prefer-spread': 'error', // Prefer spread syntax over .apply()
       
-      // Trailing comma rules for multiline lists
-      'comma-dangle': ['error', {
+      // Trailing comma rules for multiline lists.
+      // Core formatting rules are deprecated in ESLint 10; use @stylistic.
+      '@stylistic/comma-dangle': ['error', {
         'arrays': 'always-multiline',     // in multiline arrays
         'objects': 'always-multiline',    // in multiline objects
         'imports': 'always-multiline',    // in multiline imports
