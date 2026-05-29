@@ -23,7 +23,12 @@ export class CDPTransport extends EventEmitter {
   private isConnected = false;
   private reconnectAttempts = 0;
   private readonly maxReconnectAttempts = 5;
-  private readonly reconnectDelay = 1000;
+  // Exponential backoff with full jitter and an upper cap, matching the
+  // discoverInspectorPort poll strategy: base doubles each attempt (1000 ->
+  // 2000 -> 4000 -> ...) capped at reconnectMaxDelayMs, then jittered into
+  // [delay/2, delay] so concurrent transports don't retry in lockstep.
+  private readonly reconnectBaseDelayMs = 1000;
+  private readonly reconnectMaxDelayMs = 8000;
 
   constructor(private readonly options: CDPTransportOptions = {}) {
     super();
@@ -112,7 +117,14 @@ export class CDPTransport extends EventEmitter {
       this.emit('reconnecting', this.reconnectAttempts);
 
       try {
-        await setTimeout(this.reconnectDelay * this.reconnectAttempts);
+        const cappedDelay = Math.min(
+          this.reconnectBaseDelayMs * 2 ** (this.reconnectAttempts - 1),
+          this.reconnectMaxDelayMs,
+        );
+        // Full jitter: sleep a random duration in [cappedDelay/2, cappedDelay].
+        const jitteredDelay = cappedDelay / 2 + Math.random() * (cappedDelay / 2);
+
+        await setTimeout(jitteredDelay);
         await this.connect();
         // Distinct from the initial 'connected' event: subscribers that need
         // to re-issue per-attach CDP setup (Runtime.addBinding, enableDomains
