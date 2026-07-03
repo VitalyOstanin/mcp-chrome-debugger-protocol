@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-07-03
+
+### Changed
+- Dependency maintenance: bumped runtime and dev dependencies to latest (`ws` 8.21.0, `typescript-eslint`, `vitest`, `@types/node` 26, `@types/chrome-remote-interface`). No change to the server's own API or behavior.
+- CI: bumped `actions/checkout` to v7 and `codecov/codecov-action` to v7.
+
+### Security
+- Cleared high-severity npm advisories (`hono`, `ws`) via lockfile updates.
+
 ## [1.10.0] - 2026-05-29
 
 ### Added
