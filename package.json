@@ -83,7 +83,7 @@
     "@types/node": "^26.1.1",
     "@typescript-eslint/eslint-plugin": "^8.62.1",
     "@typescript-eslint/parser": "^8.62.1",
-    "@vitest/coverage-v8": "^4.1.9",
+    "@vitest/coverage-v8": "^4.1.10",
     "c8": "^11.0.0",
     "eslint": "^10.7.0",
     "express": "^5.2.1",
