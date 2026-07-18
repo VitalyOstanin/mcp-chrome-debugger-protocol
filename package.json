@@ -85,11 +85,11 @@
     "@typescript-eslint/parser": "^8.62.1",
     "@vitest/coverage-v8": "^4.1.9",
     "c8": "^11.0.0",
-    "eslint": "^10.6.0",
+    "eslint": "^10.7.0",
     "express": "^5.2.1",
     "get-port": "^7.2.0",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.62.1",
+    "typescript-eslint": "^8.63.0",
     "vitest": "^4.1.9"
   },
   "publishConfig": {
